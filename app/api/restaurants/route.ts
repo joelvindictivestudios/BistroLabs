@@ -1,0 +1,133 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
+import { prisma } from "@/lib/db/client";
+import type { RestaurantConfig } from "@/lib/email-concierge/types";
+
+// OBS v1: öppet endpoint utan auth — registrering skyddas när auth
+// (Supabase Auth/Cognito) kommer in. Duger för demo och lokal utveckling.
+
+const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+
+const registerSchema = z.object({
+  name: z.string().min(2).max(80),
+  slug: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9-]+$/, "Endast a–z, 0–9 och bindestreck"),
+  email: z.email(),
+  menu: z.string().max(1000).default(""),
+  heroImageUrl: z.union([z.url(), z.literal("")]).default(""),
+  openingHours: z.partialRecord(
+    z.enum(WEEKDAYS),
+    z.object({ open: z.string().regex(/^\d{2}:\d{2}$/), close: z.string().regex(/^\d{2}:\d{2}$/) }).nullable(),
+  ),
+  tables: z.object({
+    two: z.number().int().min(0).max(50),
+    four: z.number().int().min(0).max(50),
+    six: z.number().int().min(0).max(50),
+  }),
+  offerings: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(60),
+        description: z.string().max(200).default(""),
+        imageUrl: z.union([z.url(), z.literal("")]).default(""),
+      }),
+    )
+    .max(8)
+    .default([]),
+  escalationPartySize: z.number().int().min(1).max(50).default(8),
+});
+
+export async function POST(request: NextRequest) {
+  const parsed = registerSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Ogiltiga uppgifter", details: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+  const body = parsed.data;
+
+  const existing = await prisma.restaurant.findUnique({
+    where: { slug: body.slug },
+  });
+  if (existing) {
+    return NextResponse.json(
+      { error: `Adressen "${body.slug}" är upptagen — välj en annan.` },
+      { status: 409 },
+    );
+  }
+
+  const openingHours: RestaurantConfig["openingHours"] = {};
+  for (const day of WEEKDAYS) {
+    const range = body.openingHours[day] ?? null;
+    if (range) openingHours[day] = [range];
+  }
+  if (Object.keys(openingHours).length === 0) {
+    return NextResponse.json(
+      { error: "Minst en dag måste ha öppettider." },
+      { status: 400 },
+    );
+  }
+
+  const totalTables = body.tables.two + body.tables.four + body.tables.six;
+  if (totalTables === 0) {
+    return NextResponse.json(
+      { error: "Lägg till minst ett bord." },
+      { status: 400 },
+    );
+  }
+
+  const config: RestaurantConfig = {
+    timezone: "Europe/Stockholm",
+    openingHours,
+    bookingDurationMinutes: 120,
+    escalationPartySize: body.escalationPartySize,
+    confidenceThreshold: 0.7,
+    tone: {
+      styleGuide:
+        `Varm och professionell. Svara på svenska, kortfattat och personligt. ` +
+        `Bekräfta alltid datum, tid och antal gäster. Avsluta med 'Varma hälsningar, ${body.name}'.`,
+      fewShotExamples: [],
+    },
+    menu: body.menu,
+    offerings: body.offerings.map((o, i) => ({
+      id: `offering-${i + 1}`,
+      title: o.title,
+      description: o.description,
+      imageUrl: o.imageUrl,
+    })),
+    heroImageUrl: body.heroImageUrl,
+  };
+
+  const tableData = [
+    ...Array.from({ length: body.tables.two }, (_, i) => ({
+      name: `T${i + 1}`,
+      capacity: 2,
+    })),
+    ...Array.from({ length: body.tables.four }, (_, i) => ({
+      name: `T${body.tables.two + i + 1}`,
+      capacity: 4,
+    })),
+    ...Array.from({ length: body.tables.six }, (_, i) => ({
+      name: `T${body.tables.two + body.tables.four + i + 1}`,
+      capacity: 6,
+    })),
+  ];
+
+  const restaurant = await prisma.restaurant.create({
+    data: {
+      slug: body.slug,
+      name: body.name,
+      config,
+      tables: { create: tableData },
+    },
+  });
+
+  return NextResponse.json(
+    { slug: restaurant.slug, widgetPath: `/widget/${restaurant.slug}` },
+    { status: 201 },
+  );
+}

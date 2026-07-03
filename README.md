@@ -1,37 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BistroLabs
 
-## Getting Started
+AI-driven plattform för restaurangdrift: gästkontakt via mejl (och telefon i v2), gästprofiler som byggs över tid, och bordsplanering. Byggd med Next.js 16, Prisma 7 och Supabase Postgres + pgvector.
 
-First, run the development server:
+## Kom igång
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env   # fyll i Supabase-anslutningar + OpenAI-nyckel
+npm install
+npx prisma migrate dev # skapar schema, pgvector-extension och HNSW-index
+npm run db:seed        # demo-restaurang "demo" med bord, kunskapsbas och en gäst
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Testa Email Concierge lokalt
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run concierge:test -- --file samples/booking-request.json
+npm run concierge:test -- --file samples/faq-question.json
+npm run concierge:test -- --file samples/large-party.json   # → eskaleras (>8 pers)
+npm run concierge:test -- --file samples/complaint.json     # → eskaleras (klagomål)
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Pipelinen: intent-klassificering → RAG (pgvector) → svarsgenerering i restaurangens ton → function calling (`check_availability`/`create_booking`/`get_guest_profile`) → utkast (`DRAFT`) eller eskalering (`ESCALATED`). Ingenting skickas automatiskt.
 
-## Learn More
+## Struktur
 
-To learn more about Next.js, take a look at the following resources:
+| Katalog | Innehåll |
+|---|---|
+| `prisma/` | Schema (källa till sanning) + migrationer |
+| `lib/db/` | Prisma-klient (adapter-pg) + raw-SQL-vektorsökning |
+| `lib/ai/` | OpenAI-klient + embeddings; modell-id:n styrs via env |
+| `lib/booking/` | Availability-motor (greedy bordsallokering, ej LLM) |
+| `lib/email-concierge/` | Hela concierge-pipelinen |
+| `scripts/` | `seed.ts`, `concierge-test.ts` |
+| `samples/` | Testmejl i JSON-format |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Se `.claude/BistroLabs/Planning/2.v1Exec.md` för exekverad v1-scope och vägen mot v2 (Voice Agent m.m.).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Övriga kommandon
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-# BistroLabs
+```bash
+npm run dev          # Next.js dev-server (frontend är fortfarande scaffold)
+npm run db:studio    # Prisma Studio — bläddra i databasen
+npm run db:migrate   # ny migration efter schemaändring
+npm run lint         # eslint (OBS: next lint är borttaget i Next 16)
+```

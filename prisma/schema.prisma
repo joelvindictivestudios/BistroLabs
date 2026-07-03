@@ -1,0 +1,193 @@
+// BistroLabs datamodell — källa till sanning.
+// Vektorkolumner (Unsupported) läses/skrivs via raw SQL i lib/db/vector.ts.
+// CLI-anslutning (migrate) konfigureras i prisma.config.ts (DIRECT_URL).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InteractionType {
+  EMAIL
+  VOICE // v2
+  WIDGET // v2
+}
+
+enum Intent {
+  BOOKING_REQUEST
+  BOOKING_MODIFY
+  BOOKING_CANCEL
+  QUESTION
+  COMPLAINT
+  OTHER
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  RECEIVED
+  DRAFT // AI-genererat utkast, väntar på granskning
+  SENT // v1 når aldrig hit automatiskt
+  ESCALATED // flaggat för människa
+}
+
+model Restaurant {
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique
+  name      String
+  /// { timezone, openingHours, bookingDurationMinutes, escalationPartySize,
+  ///   confidenceThreshold, tone: { styleGuide, fewShotExamples[] }, menu }
+  /// Valideras med zod (RestaurantConfig) i lib/email-concierge/types.ts
+  config    Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tables        DiningTable[]
+  guests        Guest[]
+  bookings      Booking[]
+  threads       EmailThread[]
+  knowledgeDocs KnowledgeDocument[]
+
+  @@map("restaurants")
+}
+
+model DiningTable {
+  id           String     @id @default(uuid()) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  name         String
+  capacity     Int
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  bookings     Booking[]
+
+  @@unique([restaurantId, name])
+  @@map("tables")
+}
+
+model Guest {
+  id           String     @id @default(uuid()) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  email        String?
+  phone        String?
+  name         String?
+  createdAt    DateTime   @default(now()) @map("created_at")
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  profile      GuestProfile?
+  interactions GuestInteraction[]
+  bookings     Booking[]
+  threads      EmailThread[]
+
+  @@unique([restaurantId, email])
+  @@unique([restaurantId, phone])
+  @@index([restaurantId, phone])
+  @@map("guests")
+}
+
+model GuestProfile {
+  guestId             String    @id @map("guest_id") @db.Uuid
+  preferences         Json      @default("{}")
+  dietaryRestrictions String[]  @map("dietary_restrictions")
+  favoriteTable       String?   @map("favorite_table")
+  visitCount          Int       @default(0) @map("visit_count")
+  avgSpend            Decimal?  @map("avg_spend") @db.Decimal(10, 2)
+  lastVisit           DateTime? @map("last_visit")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  guest               Guest     @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@map("guest_profiles")
+}
+
+model GuestInteraction {
+  id         String                       @id @default(uuid()) @db.Uuid
+  guestId    String                       @map("guest_id") @db.Uuid
+  type       InteractionType
+  intent     Intent?
+  rawContent String                       @map("raw_content")
+  summary    String?
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                     @default(now()) @map("created_at")
+  guest      Guest                        @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([guestId, createdAt])
+  @@map("guest_interactions")
+}
+
+model KnowledgeDocument {
+  id           String                       @id @default(uuid()) @db.Uuid
+  restaurantId String                       @map("restaurant_id") @db.Uuid
+  category     String // "faq" | "policy" | "menu"
+  title        String
+  content      String
+  embedding    Unsupported("vector(1536)")?
+  createdAt    DateTime                     @default(now()) @map("created_at")
+  restaurant   Restaurant                   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, category])
+  @@map("knowledge_documents")
+}
+
+model Booking {
+  id           String        @id @default(uuid()) @db.Uuid
+  restaurantId String        @map("restaurant_id") @db.Uuid
+  guestId      String        @map("guest_id") @db.Uuid
+  tableId      String?       @map("table_id") @db.Uuid
+  startsAt     DateTime      @map("starts_at")
+  endsAt       DateTime      @map("ends_at")
+  partySize    Int           @map("party_size")
+  status       BookingStatus @default(PENDING)
+  notes        String?
+  createdBy    String        @default("concierge") @map("created_by") // "concierge" | "human"
+  createdAt    DateTime      @default(now()) @map("created_at")
+  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  guest        Guest         @relation(fields: [guestId], references: [id])
+  table        DiningTable?  @relation(fields: [tableId], references: [id])
+
+  @@index([restaurantId, startsAt])
+  @@index([tableId, startsAt])
+  @@map("bookings")
+}
+
+model EmailThread {
+  id           String         @id @default(uuid()) @db.Uuid
+  restaurantId String         @map("restaurant_id") @db.Uuid
+  guestId      String?        @map("guest_id") @db.Uuid
+  subject      String
+  createdAt    DateTime       @default(now()) @map("created_at")
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  guest        Guest?         @relation(fields: [guestId], references: [id])
+  messages     EmailMessage[]
+
+  @@index([restaurantId, createdAt])
+  @@map("email_threads")
+}
+
+model EmailMessage {
+  id               String           @id @default(uuid()) @db.Uuid
+  threadId         String           @map("thread_id") @db.Uuid
+  direction        MessageDirection
+  status           MessageStatus    @default(RECEIVED)
+  fromAddress      String           @map("from_address")
+  body             String
+  intent           Intent?
+  confidence       Float?
+  escalated        Boolean          @default(false)
+  escalationReason String?          @map("escalation_reason")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  thread           EmailThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@map("email_messages")
+}

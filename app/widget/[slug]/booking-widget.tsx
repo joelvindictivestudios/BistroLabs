@@ -22,6 +22,9 @@ type Props = {
   hoursDisplay: { day: string; hours: string }[];
   offerings: Offering[];
   heroImageUrl: string;
+  logoUrl: string;
+  /** Renderad inuti editorns preview-yta — fyll containern istället för viewporten. */
+  embedded?: boolean;
 };
 
 type Step = "start" | "party" | "date" | "time" | "details" | "done";
@@ -60,6 +63,8 @@ export function BookingWidget({
   hoursDisplay,
   offerings,
   heroImageUrl,
+  logoUrl,
+  embedded = false,
 }: Props) {
   const hasStart = offerings.length > 0;
   const [step, setStep] = useState<Step>(hasStart ? "start" : "party");
@@ -112,21 +117,30 @@ export function BookingWidget({
 
   return (
     <div
-      className="min-h-dvh lg:h-dvh grid lg:grid-cols-[minmax(430px,540px)_1fr] bg-[var(--w-bg)] text-[var(--w-ink)]"
+      className={`${embedded ? "h-full" : "min-h-dvh bg-[#050505] lg:h-dvh lg:p-3"} text-[var(--w-ink)]`}
       style={
         {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
+          "--w-bg": "#0d0d0d",
+          "--w-panel": "#151515",
+          "--w-line": "#282828",
           "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
+          "--w-muted": "#999999",
           "--w-accent": "#c89b5a",
         } as React.CSSProperties
       }
     >
+      {/* Två block med gap — #050505 syns i ramen och mellan blocken */}
+      <div
+        className={`grid lg:grid-cols-[1fr_1fr] lg:gap-3 ${
+          embedded ? "h-full" : "min-h-dvh lg:min-h-0 lg:h-full w-full"
+        }`}
+      >
       {/* Vänster: flödet */}
-      <div className="flex flex-col min-h-dvh lg:min-h-0 lg:h-full border-r border-[var(--w-line)]">
+      <div
+        className={`flex flex-col bg-[var(--w-bg)] lg:rounded-2xl lg:overflow-hidden ${embedded ? "min-h-0 h-full overflow-hidden" : "min-h-dvh lg:min-h-0 lg:h-full"}`}
+      >
         <header className="px-7 pt-7 pb-5 border-b border-[var(--w-line)]">
+          <div className="mx-auto w-full max-w-lg">
           <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
             Boka bord
           </p>
@@ -139,9 +153,11 @@ export function BookingWidget({
           >
             {sentence || " "}
           </p>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto px-7 py-6">
+          <div className="mx-auto w-full max-w-lg">
           {step !== "start" &&
             step !== "done" &&
             !(step === "party" && !hasStart) && (
@@ -155,7 +171,7 @@ export function BookingWidget({
 
           {step === "start" && (
             <StepShell label="Vad önskar du?">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 {offerings.map((o) => (
                   <button
                     key={o.id}
@@ -170,17 +186,19 @@ export function BookingWidget({
                       <img
                         src={o.imageUrl}
                         alt=""
-                        className="h-28 w-full object-cover"
+                        className="aspect-[5/3] w-full object-cover"
                       />
                     ) : (
-                      <div className="flex h-28 w-full items-end bg-[radial-gradient(140%_120%_at_20%_0%,#242e29_0%,#161b19_70%)] p-3">
+                      <div className="flex aspect-[5/3] w-full items-end bg-[radial-gradient(140%_120%_at_20%_0%,#222222_0%,#151515_70%)] p-3">
                         <span className="text-3xl [font-family:var(--font-display),serif] text-[var(--w-accent)]/70">
                           {o.title.charAt(0)}
                         </span>
                       </div>
                     )}
                     <div className="p-3">
-                      <p className="text-sm font-medium">{o.title}</p>
+                      <p className="text-sm font-semibold leading-snug">
+                        {o.title}
+                      </p>
                       {o.description && (
                         <p className="mt-1 line-clamp-2 text-xs text-[var(--w-muted)]">
                           {o.description}
@@ -316,6 +334,7 @@ export function BookingWidget({
               </button>
             </StepShell>
           )}
+          </div>
         </div>
 
         <ChatPanel slug={slug} />
@@ -323,15 +342,23 @@ export function BookingWidget({
 
       {/* Höger: restaurangpanel — config-driven */}
       <aside
-        className="hidden lg:flex flex-col justify-between p-12 bg-cover bg-center bg-[radial-gradient(120%_90%_at_70%_10%,#1d2622_0%,#101312_60%)]"
+        className="relative hidden lg:flex flex-col justify-between overflow-hidden p-12 lg:rounded-2xl bg-cover bg-center bg-[radial-gradient(120%_90%_at_70%_10%,#1a1a1a_0%,#0d0d0d_60%)]"
         style={
           heroImageUrl
             ? {
-                backgroundImage: `linear-gradient(to top, rgba(16,19,18,0.85) 0%, rgba(16,19,18,0.25) 60%), url(${heroImageUrl})`,
+                backgroundImage: `linear-gradient(to top, rgba(13,13,13,0.85) 0%, rgba(13,13,13,0.25) 60%), url(${heroImageUrl})`,
               }
             : undefined
         }
       >
+        {logoUrl && (
+          // eslint-disable-next-line @next/next/no-img-element -- tenant-logga från Storage
+          <img
+            src={logoUrl}
+            alt={name}
+            className="pointer-events-none absolute left-1/2 top-1/2 h-28 max-w-[400px] w-auto -translate-x-1/2 -translate-y-1/2 object-contain drop-shadow-lg"
+          />
+        )}
         <div className="self-end text-right">
           <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
             Öppettider
@@ -346,9 +373,11 @@ export function BookingWidget({
           </ul>
         </div>
         <div>
-          <p className="text-6xl xl:text-7xl leading-none [font-family:var(--font-display),serif] text-[var(--w-ink)]">
-            {name}
-          </p>
+          {!logoUrl && (
+            <p className="text-6xl xl:text-7xl leading-none [font-family:var(--font-display),serif] text-[var(--w-ink)]">
+              {name}
+            </p>
+          )}
           {menu && (
             <p className="mt-6 max-w-md text-sm leading-relaxed text-[var(--w-muted)]">
               {menu}
@@ -356,6 +385,7 @@ export function BookingWidget({
           )}
         </div>
       </aside>
+      </div>
     </div>
   );
 }
@@ -638,6 +668,7 @@ function ChatPanel({ slug }: { slug: string }) {
 
   return (
     <div className="border-t border-[var(--w-line)] px-7 py-4">
+      <div className="mx-auto w-full max-w-lg">
       {messages.length > 0 && (
         <div
           ref={threadRef}
@@ -684,6 +715,7 @@ function ChatPanel({ slug }: { slug: string }) {
           ↑
         </button>
       </form>
+      </div>
     </div>
   );
 }

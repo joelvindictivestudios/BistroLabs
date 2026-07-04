@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/client";
+import { getUser } from "@/lib/auth/server";
 import type { RestaurantConfig } from "@/lib/email-concierge/types";
-
-// OBS v1: öppet endpoint utan auth — registrering skyddas när auth
-// (Supabase Auth/Cognito) kommer in. Duger för demo och lokal utveckling.
 
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 
+// Minimal payload: namn + slug räcker (create-restaurant-flödet).
+// Resten får vettiga defaults och ställs in i editorn efteråt.
 const registerSchema = z.object({
   name: z.string().min(2).max(80),
   slug: z
@@ -15,18 +15,28 @@ const registerSchema = z.object({
     .min(2)
     .max(40)
     .regex(/^[a-z0-9-]+$/, "Endast a–z, 0–9 och bindestreck"),
-  email: z.email(),
+  email: z.email().optional(),
   menu: z.string().max(1000).default(""),
   heroImageUrl: z.union([z.url(), z.literal("")]).default(""),
-  openingHours: z.partialRecord(
-    z.enum(WEEKDAYS),
-    z.object({ open: z.string().regex(/^\d{2}:\d{2}$/), close: z.string().regex(/^\d{2}:\d{2}$/) }).nullable(),
-  ),
-  tables: z.object({
-    two: z.number().int().min(0).max(50),
-    four: z.number().int().min(0).max(50),
-    six: z.number().int().min(0).max(50),
-  }),
+  openingHours: z
+    .partialRecord(
+      z.enum(WEEKDAYS),
+      z.object({ open: z.string().regex(/^\d{2}:\d{2}$/), close: z.string().regex(/^\d{2}:\d{2}$/) }).nullable(),
+    )
+    .default({
+      tue: { open: "17:00", close: "23:00" },
+      wed: { open: "17:00", close: "23:00" },
+      thu: { open: "17:00", close: "23:00" },
+      fri: { open: "17:00", close: "23:00" },
+      sat: { open: "17:00", close: "23:00" },
+    }),
+  tables: z
+    .object({
+      two: z.number().int().min(0).max(50),
+      four: z.number().int().min(0).max(50),
+      six: z.number().int().min(0).max(50),
+    })
+    .default({ two: 4, four: 3, six: 1 }),
   offerings: z
     .array(
       z.object({
@@ -36,11 +46,19 @@ const registerSchema = z.object({
       }),
     )
     .max(8)
-    .default([]),
+    .default([{ title: "Middag", description: "", imageUrl: "" }]),
   escalationPartySize: z.number().int().min(1).max(50).default(8),
 });
 
 export async function POST(request: NextRequest) {
+  const user = await getUser();
+  if (!user) {
+    return NextResponse.json(
+      { error: "Du måste vara inloggad för att skapa en restaurang." },
+      { status: 401 },
+    );
+  }
+
   const parsed = registerSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json(
@@ -100,6 +118,7 @@ export async function POST(request: NextRequest) {
       imageUrl: o.imageUrl,
     })),
     heroImageUrl: body.heroImageUrl,
+    logoUrl: "",
   };
 
   const tableData = [
@@ -121,13 +140,18 @@ export async function POST(request: NextRequest) {
     data: {
       slug: body.slug,
       name: body.name,
+      ownerId: user.id,
       config,
       tables: { create: tableData },
     },
   });
 
   return NextResponse.json(
-    { slug: restaurant.slug, widgetPath: `/widget/${restaurant.slug}` },
+    {
+      slug: restaurant.slug,
+      widgetPath: `/widget/${restaurant.slug}`,
+      editorPath: `/editor/${restaurant.slug}`,
+    },
     { status: 201 },
   );
 }

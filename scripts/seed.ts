@@ -65,6 +65,7 @@ const demoConfig: RestaurantConfig = {
     },
   ],
   heroImageUrl: "",
+  logoUrl: "",
 };
 
 const knowledgeDocs = [

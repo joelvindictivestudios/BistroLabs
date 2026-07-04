@@ -39,6 +39,8 @@ export const restaurantConfigSchema = z.object({
     .default([]),
   /** Valfri hjältebild för widgetens högerpanel. */
   heroImageUrl: z.string().default(""),
+  /** Valfri logga — visas centrerad på hjältebilden istället för namnet i text. */
+  logoUrl: z.string().default(""),
 });
 
 export type RestaurantConfig = z.infer<typeof restaurantConfigSchema>;

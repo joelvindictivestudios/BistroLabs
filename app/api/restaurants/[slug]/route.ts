@@ -1,0 +1,161 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
+import { prisma } from "@/lib/db/client";
+import { getUser } from "@/lib/auth/server";
+import {
+  parseRestaurantConfig,
+  type RestaurantConfig,
+} from "@/lib/email-concierge/types";
+
+const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+
+const patchSchema = z.object({
+  name: z.string().min(2).max(80).optional(),
+  menu: z.string().max(1000).optional(),
+  heroImageUrl: z.union([z.url(), z.literal("")]).optional(),
+  logoUrl: z.union([z.url(), z.literal("")]).optional(),
+  escalationPartySize: z.number().int().min(1).max(50).optional(),
+  published: z.boolean().optional(),
+  openingHours: z
+    .partialRecord(
+      z.enum(WEEKDAYS),
+      z
+        .object({
+          open: z.string().regex(/^\d{2}:\d{2}$/),
+          close: z.string().regex(/^\d{2}:\d{2}$/),
+        })
+        .nullable(),
+    )
+    .optional(),
+  offerings: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        title: z.string().min(1).max(60),
+        description: z.string().max(200).default(""),
+        imageUrl: z.union([z.url(), z.literal("")]).default(""),
+      }),
+    )
+    .max(8)
+    .optional(),
+  tables: z
+    .object({
+      two: z.number().int().min(0).max(50),
+      four: z.number().int().min(0).max(50),
+      six: z.number().int().min(0).max(50),
+    })
+    .optional(),
+});
+
+// PATCH /api/restaurants/{slug} — partiell uppdatering av namn/config/publicering.
+// Editorns "Spara" och "Publicera" går båda hit.
+export async function PATCH(
+  request: NextRequest,
+  ctx: RouteContext<"/api/restaurants/[slug]">,
+) {
+  const user = await getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Inte inloggad." }, { status: 401 });
+  }
+
+  const { slug } = await ctx.params;
+  const restaurant = await prisma.restaurant.findUnique({ where: { slug } });
+  if (!restaurant) {
+    return NextResponse.json({ error: "Okänd restaurang." }, { status: 404 });
+  }
+  if (restaurant.ownerId !== user.id) {
+    return NextResponse.json(
+      { error: "Du äger inte den här restaurangen." },
+      { status: 403 },
+    );
+  }
+
+  const parsed = patchSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Ogiltiga uppgifter", details: parsed.error.issues },
+      { status: 400 },
+    );
+  }
+  const body = parsed.data;
+
+  // Merge in i befintlig config — bara skickade fält skrivs över
+  const config: RestaurantConfig = parseRestaurantConfig(restaurant.config);
+  if (body.menu !== undefined) config.menu = body.menu;
+  if (body.heroImageUrl !== undefined) config.heroImageUrl = body.heroImageUrl;
+  if (body.logoUrl !== undefined) config.logoUrl = body.logoUrl;
+  if (body.escalationPartySize !== undefined)
+    config.escalationPartySize = body.escalationPartySize;
+  if (body.openingHours !== undefined) {
+    const openingHours: RestaurantConfig["openingHours"] = {};
+    for (const day of WEEKDAYS) {
+      const range = body.openingHours[day] ?? null;
+      if (range) openingHours[day] = [range];
+    }
+    if (Object.keys(openingHours).length === 0) {
+      return NextResponse.json(
+        { error: "Minst en dag måste ha öppettider." },
+        { status: 400 },
+      );
+    }
+    config.openingHours = openingHours;
+  }
+  if (body.offerings !== undefined) {
+    config.offerings = body.offerings.map((o, i) => ({
+      id: o.id ?? `offering-${i + 1}`,
+      title: o.title,
+      description: o.description,
+      imageUrl: o.imageUrl,
+    }));
+  }
+
+  // Bord: byts bara när inga bokningar refererar dem (FK)
+  if (body.tables !== undefined) {
+    const bookingCount = await prisma.booking.count({
+      where: { restaurantId: restaurant.id },
+    });
+    if (bookingCount > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Borden kan inte ändras när det finns bokningar — kontakta support.",
+        },
+        { status: 409 },
+      );
+    }
+    const t = body.tables;
+    if (t.two + t.four + t.six === 0) {
+      return NextResponse.json(
+        { error: "Lägg till minst ett bord." },
+        { status: 400 },
+      );
+    }
+    await prisma.diningTable.deleteMany({
+      where: { restaurantId: restaurant.id },
+    });
+    const tableData = [
+      ...Array.from({ length: t.two }, (_, i) => ({ name: `T${i + 1}`, capacity: 2 })),
+      ...Array.from({ length: t.four }, (_, i) => ({ name: `T${t.two + i + 1}`, capacity: 4 })),
+      ...Array.from({ length: t.six }, (_, i) => ({ name: `T${t.two + t.four + i + 1}`, capacity: 6 })),
+    ];
+    await prisma.diningTable.createMany({
+      data: tableData.map((d) => ({ ...d, restaurantId: restaurant.id })),
+    });
+  }
+
+  const updated = await prisma.restaurant.update({
+    where: { id: restaurant.id },
+    data: {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.published !== undefined ? { published: body.published } : {}),
+      config,
+    },
+  });
+
+  return NextResponse.json({
+    slug: updated.slug,
+    name: updated.name,
+    published: updated.published,
+    widgetPath: `/widget/${updated.slug}`,
+  });
+}

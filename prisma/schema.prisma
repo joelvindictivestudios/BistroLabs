@@ -50,6 +50,10 @@ model Restaurant {
   id        String   @id @default(uuid()) @db.Uuid
   slug      String   @unique
   name      String
+  /// Supabase Auth user-id (auth.users) — ingen FK eftersom auth-schemat ägs av Supabase
+  ownerId   String?  @map("owner_id") @db.Uuid
+  /// Opublicerad widget visas bara för ägaren; publikt = "Öppnar snart"
+  published Boolean  @default(false)
   /// { timezone, openingHours, bookingDurationMinutes, escalationPartySize,
   ///   confidenceThreshold, tone: { styleGuide, fewShotExamples[] }, menu }
   /// Valideras med zod (RestaurantConfig) i lib/email-concierge/types.ts

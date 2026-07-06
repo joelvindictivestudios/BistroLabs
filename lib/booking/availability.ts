@@ -92,9 +92,14 @@ export async function checkAvailability(
     startsAt.getTime() + config.bookingDurationMinutes * 60_000,
   );
 
-  // Greedy: minsta bord som rymmer sällskapet och saknar överlappande bokning
+  // Greedy: minsta bord som rymmer sällskapet (och tillåter så små sällskap —
+  // "endast 2"-bord har minSeats 2) och saknar överlappande bokning
   const tables = await prisma.diningTable.findMany({
-    where: { restaurantId, capacity: { gte: partySize } },
+    where: {
+      restaurantId,
+      capacity: { gte: partySize },
+      minSeats: { lte: partySize },
+    },
     orderBy: [{ capacity: "asc" }, { name: "asc" }],
     include: {
       bookings: {
@@ -168,7 +173,11 @@ export async function listAvailableSlots(
       durationMs,
   );
   const tables = await prisma.diningTable.findMany({
-    where: { restaurantId, capacity: { gte: partySize } },
+    where: {
+      restaurantId,
+      capacity: { gte: partySize },
+      minSeats: { lte: partySize },
+    },
     include: {
       bookings: {
         where: {

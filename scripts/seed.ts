@@ -132,21 +132,38 @@ async function main() {
       slug: DEMO_SLUG,
       name: "Demo Bistro",
       config: demoConfig,
-      tables: {
-        create: [
-          { name: "T1", capacity: 2 },
-          { name: "T2", capacity: 2 },
-          { name: "T3", capacity: 2 },
-          { name: "T4", capacity: 2 },
-          { name: "T5", capacity: 4 },
-          { name: "T6", capacity: 4 },
-          { name: "T7", capacity: 4 },
-          { name: "T8", capacity: 6 },
-        ],
-      },
     },
   });
-  console.log(`Restaurang skapad (${restaurant.id}) med 8 bord`);
+  const matsalen = await prisma.room.create({
+    data: { restaurantId: restaurant.id, name: "Matsalen", sortOrder: 0 },
+  });
+  const uteserveringen = await prisma.room.create({
+    data: { restaurantId: restaurant.id, name: "Uteserveringen", sortOrder: 1 },
+  });
+  await prisma.diningTable.createMany({
+    data: [
+      // Matsalen — T1 är "endast 2" (minSeats = capacity) som exempel
+      { name: "T1", capacity: 2, minSeats: 2, shape: "round", posX: 0, posY: 0 },
+      { name: "T2", capacity: 2, minSeats: 1, shape: "round", posX: 3, posY: 0 },
+      { name: "T3", capacity: 2, minSeats: 1, shape: "square", posX: 6, posY: 0 },
+      { name: "T4", capacity: 4, minSeats: 2, shape: "round", posX: 0, posY: 3 },
+      { name: "T5", capacity: 4, minSeats: 2, shape: "round", posX: 3, posY: 3 },
+      { name: "T6", capacity: 6, minSeats: 4, shape: "rect", posX: 6, posY: 3 },
+    ].map((t) => ({ ...t, restaurantId: restaurant.id, roomId: matsalen.id })),
+  });
+  await prisma.diningTable.createMany({
+    data: [
+      { name: "U1", capacity: 2, minSeats: 1, shape: "round", posX: 0, posY: 0 },
+      { name: "U2", capacity: 4, minSeats: 2, shape: "square", posX: 3, posY: 0 },
+    ].map((t) => ({
+      ...t,
+      restaurantId: restaurant.id,
+      roomId: uteserveringen.id,
+    })),
+  });
+  console.log(
+    `Restaurang skapad (${restaurant.id}) med 2 rum och 8 bord`,
+  );
 
   // Kunskapsdokument + embeddings i batch
   const embeddings = await embedMany(

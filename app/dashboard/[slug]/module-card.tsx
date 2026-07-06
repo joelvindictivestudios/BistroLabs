@@ -3,8 +3,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { FaLock } from "react-icons/fa";
-import { FaInfoCircle } from "react-icons/fa";
+import { FaLock, FaInfoCircle } from "react-icons/fa";
 
 export type ModuleCardProps = {
   href: string;

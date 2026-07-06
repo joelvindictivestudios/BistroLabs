@@ -48,13 +48,6 @@ const patchSchema = z.object({
     )
     .max(8)
     .optional(),
-  tables: z
-    .object({
-      two: z.number().int().min(0).max(50),
-      four: z.number().int().min(0).max(50),
-      six: z.number().int().min(0).max(50),
-    })
-    .optional(),
 });
 
 // PATCH /api/restaurants/{slug} — partiell uppdatering av namn/config/publicering.
@@ -124,39 +117,7 @@ export async function PATCH(
     }));
   }
 
-  // Bord: byts bara när inga bokningar refererar dem (FK)
-  if (body.tables !== undefined) {
-    const bookingCount = await prisma.booking.count({
-      where: { restaurantId: restaurant.id },
-    });
-    if (bookingCount > 0) {
-      return NextResponse.json(
-        {
-          error:
-            "Borden kan inte ändras när det finns bokningar — kontakta support.",
-        },
-        { status: 409 },
-      );
-    }
-    const t = body.tables;
-    if (t.two + t.four + t.six === 0) {
-      return NextResponse.json(
-        { error: "Lägg till minst ett bord." },
-        { status: 400 },
-      );
-    }
-    await prisma.diningTable.deleteMany({
-      where: { restaurantId: restaurant.id },
-    });
-    const tableData = [
-      ...Array.from({ length: t.two }, (_, i) => ({ name: `T${i + 1}`, capacity: 2 })),
-      ...Array.from({ length: t.four }, (_, i) => ({ name: `T${t.two + i + 1}`, capacity: 4 })),
-      ...Array.from({ length: t.six }, (_, i) => ({ name: `T${t.two + t.four + i + 1}`, capacity: 6 })),
-    ];
-    await prisma.diningTable.createMany({
-      data: tableData.map((d) => ({ ...d, restaurantId: restaurant.id })),
-    });
-  }
+  // Bord hanteras numera av bordskartan: PUT /api/restaurants/{slug}/floor-plan
 
   const updated = await prisma.restaurant.update({
     where: { id: restaurant.id },

@@ -130,20 +130,21 @@ export async function POST(request: NextRequest) {
     },
   };
 
-  const tableData = [
-    ...Array.from({ length: body.tables.two }, (_, i) => ({
-      name: `T${i + 1}`,
-      capacity: 2,
-    })),
-    ...Array.from({ length: body.tables.four }, (_, i) => ({
-      name: `T${body.tables.two + i + 1}`,
-      capacity: 4,
-    })),
-    ...Array.from({ length: body.tables.six }, (_, i) => ({
-      name: `T${body.tables.two + body.tables.four + i + 1}`,
-      capacity: 6,
-    })),
+  // Standardbord placeras i rummet "Matsalen" på ett prydligt raster
+  // (4 bord per rad) — redigeras sedan i bordskartan under Ditt företag
+  const capacities = [
+    ...Array.from({ length: body.tables.two }, () => 2),
+    ...Array.from({ length: body.tables.four }, () => 4),
+    ...Array.from({ length: body.tables.six }, () => 6),
   ];
+  const tableData = capacities.map((capacity, i) => ({
+    name: `T${i + 1}`,
+    capacity,
+    minSeats: 1,
+    shape: capacity >= 6 ? "rect" : "round",
+    posX: (i % 4) * 3,
+    posY: Math.floor(i / 4) * 3,
+  }));
 
   const restaurant = await prisma.restaurant.create({
     data: {
@@ -151,8 +152,17 @@ export async function POST(request: NextRequest) {
       name: body.name,
       ownerId: user.id,
       config,
-      tables: { create: tableData },
     },
+  });
+  const room = await prisma.room.create({
+    data: { restaurantId: restaurant.id, name: "Matsalen", sortOrder: 0 },
+  });
+  await prisma.diningTable.createMany({
+    data: tableData.map((t) => ({
+      ...t,
+      restaurantId: restaurant.id,
+      roomId: room.id,
+    })),
   });
 
   return NextResponse.json(

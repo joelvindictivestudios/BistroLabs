@@ -3,25 +3,11 @@
 import { useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import type { RestaurantConfig } from "@/lib/email-concierge/types";
 
-// Träna din AI: grundinfo (delas med widget-editorn via samma config),
-// policyer och dokumentuppladdning → kunskapsbasen (RAG) som driver
-// widget-chatten, mejl-conciergen och kommande telefonassistenten.
+// Träna din AI: policyer och dokumentuppladdning → kunskapsbasen (RAG) som
+// driver widget-chatten, mejl-conciergen och telefonassistenten.
+// Grundläggande företagsuppgifter fylls i under "Ditt företag".
 
-const WEEKDAYS = [
-  { key: "mon", label: "Måndag" },
-  { key: "tue", label: "Tisdag" },
-  { key: "wed", label: "Onsdag" },
-  { key: "thu", label: "Torsdag" },
-  { key: "fri", label: "Fredag" },
-  { key: "sat", label: "Lördag" },
-  { key: "sun", label: "Söndag" },
-] as const;
-
-type DayKey = (typeof WEEKDAYS)[number]["key"];
-type DayHours = { open: string; close: string } | null;
-type Tables = { two: number; four: number; six: number };
 type Doc = { id: string; category: string; title: string };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -36,38 +22,17 @@ const POLICY_TITLES = ["Avbokningspolicy", "Allergihantering"] as const;
 
 type Props = {
   slug: string;
-  initialName: string;
-  initialConfig: RestaurantConfig;
-  initialTables: Tables;
-  tablesLocked: boolean;
+  name: string;
   initialPolicies: Record<string, string>;
   initialDocuments: Doc[];
 };
 
-function configToHours(config: RestaurantConfig): Record<DayKey, DayHours> {
-  const hours = {} as Record<DayKey, DayHours>;
-  for (const { key } of WEEKDAYS) {
-    const ranges = config.openingHours[key] ?? [];
-    hours[key] = ranges.length
-      ? { open: ranges[0].open, close: ranges[0].close }
-      : null;
-  }
-  return hours;
-}
-
 export function TrainClient({
   slug,
-  initialName,
-  initialConfig,
-  initialTables,
-  tablesLocked,
+  name,
   initialPolicies,
   initialDocuments,
 }: Props) {
-  const [name, setName] = useState(initialName);
-  const [address, setAddress] = useState(initialConfig.address);
-  const [hours, setHours] = useState(() => configToHours(initialConfig));
-  const [tables, setTables] = useState<Tables>(initialTables);
   const [policies, setPolicies] =
     useState<Record<string, string>>(initialPolicies);
   const [documents, setDocuments] = useState<Doc[]>(initialDocuments);
@@ -80,21 +45,6 @@ export function TrainClient({
     setError(null);
     setSavedAt(null);
     try {
-      const res = await fetch(`/api/restaurants/${slug}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          address,
-          openingHours: hours,
-          ...(tablesLocked ? {} : { tables }),
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.error ?? "Kunde inte spara.");
-        return;
-      }
       for (const title of POLICY_TITLES) {
         const policyRes = await fetch(`/api/restaurants/${slug}/policies`, {
           method: "PUT",
@@ -176,115 +126,6 @@ export function TrainClient({
             telefonassistenten.
           </p>
         </div>
-
-        <section>
-          <h2 className={labelClass}>Grundinfo</h2>
-          <div className="mt-4 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Restaurangens namn"
-                className={inputClass}
-              />
-              <input
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="Adress, t.ex. Storgatan 1, Stockholm"
-                className={inputClass}
-              />
-            </div>
-          </div>
-          <div className="mt-6 space-y-2">
-            {WEEKDAYS.map(({ key, label }) => {
-              const day = hours[key];
-              return (
-                <div key={key} className="flex items-center gap-3 text-sm">
-                  <label className="flex w-24 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={day !== null}
-                      onChange={(e) =>
-                        setHours((h) => ({
-                          ...h,
-                          [key]: e.target.checked
-                            ? { open: "17:00", close: "23:00" }
-                            : null,
-                        }))
-                      }
-                      className="accent-[var(--w-accent)]"
-                    />
-                    {label}
-                  </label>
-                  {day ? (
-                    <span className="flex items-center gap-1.5 font-mono text-xs">
-                      <input
-                        type="time"
-                        value={day.open}
-                        onChange={(e) =>
-                          setHours((h) => ({
-                            ...h,
-                            [key]: { ...day, open: e.target.value },
-                          }))
-                        }
-                        className="rounded-lg border border-[var(--w-line)] bg-[var(--w-panel)] px-1.5 py-1"
-                      />
-                      –
-                      <input
-                        type="time"
-                        value={day.close}
-                        onChange={(e) =>
-                          setHours((h) => ({
-                            ...h,
-                            [key]: { ...day, close: e.target.value },
-                          }))
-                        }
-                        className="rounded-lg border border-[var(--w-line)] bg-[var(--w-panel)] px-1.5 py-1"
-                      />
-                    </span>
-                  ) : (
-                    <span className="text-xs text-[var(--w-muted)]">Stängt</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-6">
-            <p className="text-xs text-[var(--w-muted)] mb-2">Bordskapacitet</p>
-            {tablesLocked ? (
-              <p className="text-xs text-[var(--w-muted)]">
-                Borden är låsta eftersom det finns bokningar.
-              </p>
-            ) : (
-              <div className="grid grid-cols-3 gap-4">
-                {(
-                  [
-                    ["two", "2 pers"],
-                    ["four", "4 pers"],
-                    ["six", "6 pers"],
-                  ] as const
-                ).map(([key, label]) => (
-                  <label key={key} className="text-sm">
-                    <span className="text-xs text-[var(--w-muted)]">{label}</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={50}
-                      value={tables[key]}
-                      onChange={(e) =>
-                        setTables((t) => ({
-                          ...t,
-                          [key]: Math.max(0, Number(e.target.value) || 0),
-                        }))
-                      }
-                      className={`${inputClass} font-mono`}
-                    />
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
 
         <section>
           <h2 className={labelClass}>Policyer</h2>

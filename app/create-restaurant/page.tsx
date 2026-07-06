@@ -16,13 +16,13 @@ export default async function CreateRestaurantPage() {
   const user = await getUser();
   if (!user) redirect("/login");
 
-  // Äger man redan en restaurang är editorn hemskärmen
+  // Äger man redan en restaurang är hubben hemskärmen
   const existing = await prisma.restaurant.findFirst({
     where: { ownerId: user.id },
     orderBy: { createdAt: "asc" },
     select: { slug: true },
   });
-  if (existing) redirect(`/editor/${existing.slug}`);
+  if (existing) redirect(`/dashboard/${existing.slug}`);
 
   const meta = (user.user_metadata ?? {}) as {
     name?: string;

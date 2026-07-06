@@ -66,6 +66,15 @@ const demoConfig: RestaurantConfig = {
   ],
   heroImageUrl: "",
   logoUrl: "",
+  address: "Storgatan 1, 111 22 Stockholm",
+  voiceAgent: {
+    voice: "coral",
+    greeting: "",
+    maxWaitSeconds: 20,
+    transferNumber: "",
+    phoneNumber: "",
+    phoneSid: "",
+  },
 };
 
 const knowledgeDocs = [

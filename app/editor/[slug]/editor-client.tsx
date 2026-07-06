@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getBrowserSupabase } from "@/lib/auth/client";
 import type { RestaurantConfig } from "@/lib/email-concierge/types";
@@ -173,13 +174,21 @@ export function EditorClient({
     >
       {/* Toppbar */}
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-[var(--w-line)] px-5">
-        <Image
-          src="/BLWhiteSide.png"
-          alt="BistroLabs"
-          width={138}
-          height={30}
-          className="h-7 w-auto"
-        />
+        <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
+          <Image
+            src="/BLWhiteSide.png"
+            alt="BistroLabs"
+            width={138}
+            height={30}
+            className="h-7 w-auto"
+          />
+        </Link>
+        <Link
+          href={`/dashboard/${slug}`}
+          className="text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition-colors mt-2"
+        >
+          ‹ Översikt
+        </Link>
         <span
           className={`rounded-full border mt-2 px-3 py-1 text-[11px] font-medium ${
             published

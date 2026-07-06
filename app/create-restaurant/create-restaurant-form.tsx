@@ -53,7 +53,7 @@ export function CreateRestaurantForm({
         setError(data.error ?? "Kunde inte skapa restaurangen — prova igen.");
         return;
       }
-      router.push(data.editorPath);
+      router.push(`/dashboard/${data.slug}`);
     } catch {
       setError("Något gick fel — prova igen.");
     } finally {

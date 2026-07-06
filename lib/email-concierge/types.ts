@@ -41,6 +41,27 @@ export const restaurantConfigSchema = z.object({
   heroImageUrl: z.string().default(""),
   /** Valfri logga — visas centrerad på hjältebilden istället för namnet i text. */
   logoUrl: z.string().default(""),
+  /** Gatuadress — krävs innan Bokningsassistenten kan aktiveras. */
+  address: z.string().default(""),
+  /** Telefonagentens inställningar (Bokningsassistenten). */
+  voiceAgent: z
+    .object({
+      /** gpt-realtime voice-id (whitelablas i UI:t). */
+      voice: z.string().default("coral"),
+      greeting: z.string().default(""),
+      maxWaitSeconds: z.number().int().min(5).max(120).default(20),
+      transferNumber: z.string().default(""),
+      phoneNumber: z.string().default(""), // köpt E.164-nummer
+      phoneSid: z.string().default(""), // Twilio IncomingPhoneNumber SID
+    })
+    .default({
+      voice: "coral",
+      greeting: "",
+      maxWaitSeconds: 20,
+      transferNumber: "",
+      phoneNumber: "",
+      phoneSid: "",
+    }),
 });
 
 export type RestaurantConfig = z.infer<typeof restaurantConfigSchema>;

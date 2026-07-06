@@ -119,6 +119,15 @@ export async function POST(request: NextRequest) {
     })),
     heroImageUrl: body.heroImageUrl,
     logoUrl: "",
+    address: "",
+    voiceAgent: {
+      voice: "coral",
+      greeting: "",
+      maxWaitSeconds: 20,
+      transferNumber: "",
+      phoneNumber: "",
+      phoneSid: "",
+    },
   };
 
   const tableData = [

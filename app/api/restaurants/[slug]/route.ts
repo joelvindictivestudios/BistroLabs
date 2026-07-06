@@ -14,6 +14,16 @@ const patchSchema = z.object({
   menu: z.string().max(1000).optional(),
   heroImageUrl: z.union([z.url(), z.literal("")]).optional(),
   logoUrl: z.union([z.url(), z.literal("")]).optional(),
+  address: z.string().max(200).optional(),
+  voiceAgent: z
+    .object({
+      voice: z.string().max(30),
+      greeting: z.string().max(500),
+      maxWaitSeconds: z.number().int().min(5).max(120),
+      transferNumber: z.string().max(30),
+    })
+    .partial()
+    .optional(),
   escalationPartySize: z.number().int().min(1).max(50).optional(),
   published: z.boolean().optional(),
   openingHours: z
@@ -84,6 +94,11 @@ export async function PATCH(
   if (body.menu !== undefined) config.menu = body.menu;
   if (body.heroImageUrl !== undefined) config.heroImageUrl = body.heroImageUrl;
   if (body.logoUrl !== undefined) config.logoUrl = body.logoUrl;
+  if (body.address !== undefined) config.address = body.address;
+  if (body.voiceAgent !== undefined) {
+    // phoneNumber/phoneSid skrivs ENDAST av phone-number-endpointen
+    config.voiceAgent = { ...config.voiceAgent, ...body.voiceAgent };
+  }
   if (body.escalationPartySize !== undefined)
     config.escalationPartySize = body.escalationPartySize;
   if (body.openingHours !== undefined) {

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import Image from "next/image";
+import Link from "next/link";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
@@ -121,6 +122,24 @@ export default async function DashboardPage({
             <ModuleCard key={m.href} {...m} />
           ))}
         </div>
+
+        {/* Bokningar — fullbreddskort med foto + mörk overlay nertill */}
+        <Link
+          href={`/bookings/${slug}`}
+          className="group relative mt-4 block h-56 overflow-hidden rounded-2xl border border-[var(--w-line)] transition-colors motion-safe:duration-150 hover:border-[var(--w-accent)]"
+        >
+          <Image
+            src="/restaurant.jpg"
+            alt=""
+            fill
+            sizes="(min-width: 1024px) 896px, 100vw"
+            className="object-cover transition-transform motion-safe:duration-300 group-hover:scale-[1.03]"
+          />
+          <div className="absolute inset-x-0 bottom-0 h-[60%] bg-gradient-to-t from-black/95 via-black/65 to-transparent" />
+          <span className="absolute bottom-5 left-6 text-3xl font-semibold tracking-tight text-white [font-family:var(--font-display),sans-serif]">
+            Bokningar
+          </span>
+        </Link>
       </main>
     </div>
   );

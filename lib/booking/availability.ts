@@ -215,34 +215,60 @@ export async function createBooking(
   notes?: string,
   opts?: { status?: "PENDING" | "CONFIRMED"; createdBy?: string },
 ): Promise<CreateBookingResult> {
-  const availability = await checkAvailability(
-    restaurantId,
-    config,
-    date,
-    time,
-    partySize,
-  );
-  if (!availability.available) {
-    return { ok: false, reason: availability.reason };
-  }
-  // OBS v1: check-then-insert utan lås — race accepterad för lokal testning
-  const booking = await prisma.booking.create({
-    data: {
+  // Dubbelbokning stoppas i databasen av exclusion-constrainten
+  // bookings_no_overlap (BLA-10). Förlorar vi racet mot en samtidig bokning
+  // provar vi om — nästa försök ser vinnarens rad och tar ett annat bord.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const availability = await checkAvailability(
       restaurantId,
-      guestId,
-      tableId: availability.table.id,
-      startsAt: availability.startsAt,
-      endsAt: availability.endsAt,
+      config,
+      date,
+      time,
       partySize,
-      notes,
-      status: opts?.status ?? "PENDING",
-      createdBy: opts?.createdBy ?? "concierge",
-    },
-  });
-  return {
-    ok: true,
-    bookingId: booking.id,
-    tableName: availability.table.name,
-    startsAt: availability.startsAt,
-  };
+    );
+    if (!availability.available) {
+      return { ok: false, reason: availability.reason };
+    }
+    try {
+      const booking = await prisma.booking.create({
+        data: {
+          restaurantId,
+          guestId,
+          tableId: availability.table.id,
+          startsAt: availability.startsAt,
+          endsAt: availability.endsAt,
+          partySize,
+          notes,
+          status: opts?.status ?? "PENDING",
+          createdBy: opts?.createdBy ?? "concierge",
+        },
+      });
+      return {
+        ok: true,
+        bookingId: booking.id,
+        tableName: availability.table.name,
+        startsAt: availability.startsAt,
+      };
+    } catch (e) {
+      if (isOverlapViolation(e) && attempt < MAX_ATTEMPTS) continue;
+      if (isOverlapViolation(e)) {
+        return {
+          ok: false,
+          reason: `Tiden hann bokas av någon annan — försök med en annan tid.`,
+        };
+      }
+      throw e;
+    }
+  }
+  return { ok: false, reason: "Bokningen kunde inte genomföras — försök igen." };
+}
+
+/** Träff på exclusion-constrainten bookings_no_overlap (SQLSTATE 23P01). */
+function isOverlapViolation(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const text = `${"message" in e ? e.message : ""}${JSON.stringify(
+    "meta" in e ? e.meta : "",
+  )}`;
+  return text.includes("bookings_no_overlap") || text.includes("23P01");
 }

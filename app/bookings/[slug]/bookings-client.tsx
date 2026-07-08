@@ -1,0 +1,1172 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { getBrowserSupabase } from "@/lib/auth/client";
+import {
+  GRID_W,
+  GRID_H,
+  CELL,
+  FOOTPRINT,
+  chairPositions,
+  toShape,
+  type Shape,
+} from "@/lib/floor-plan";
+
+// BLA-31: den operativa dagvyn. Bordskartan (read-only-layout) visar dagens
+// bokningar vid vald tidpunkt, uppdateras i realtid via Supabase postgres_changes,
+// och personalen kan checka in gäster, släppa bord och drag-and-droppa
+// bokningar mellan bord. Auto-tilldelningen sker redan vid bokningstillfället;
+// BLA-10:s exclusion constraint skyddar även manuella flyttar.
+
+const GRACE_MINUTES = 15;
+const OCCUPYING = new Set(["PENDING", "CONFIRMED", "SEATED"]);
+
+type Room = { id: string; name: string };
+type TableRow = {
+  id: string;
+  roomId: string | null;
+  name: string;
+  capacity: number;
+  minSeats: number;
+  shape: string;
+  posX: number;
+  posY: number;
+};
+type Booking = {
+  id: string;
+  tableId: string | null;
+  startsAt: string;
+  endsAt: string;
+  partySize: number;
+  status: string;
+  seatedAt: string | null;
+  createdAt: string;
+  createdBy: string;
+  notes: string | null;
+  guestName: string;
+};
+type DayData = {
+  restaurantId: string;
+  rooms: Room[];
+  tables: TableRow[];
+  bookings: Booking[];
+};
+
+type DayHoursRange = { open: string; close: string };
+
+type Props = {
+  slug: string;
+  restaurantId: string;
+  restaurantName: string;
+  openingHours: Record<string, DayHoursRange[]>;
+};
+
+const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+
+const STATUS_META: Record<string, { label: string; classes: string }> = {
+  PENDING: {
+    label: "Väntar",
+    classes: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
+  },
+  CONFIRMED: {
+    label: "Bekräftad",
+    classes: "border-[var(--w-accent)]/50 bg-[var(--w-accent)]/10 text-[var(--w-accent)]",
+  },
+  SEATED: {
+    label: "Sitter",
+    classes: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400",
+  },
+  COMPLETED: {
+    label: "Genomförd",
+    classes: "border-[var(--w-line)] bg-[var(--w-panel)] text-[var(--w-muted)]",
+  },
+  CANCELLED: {
+    label: "Avbokad",
+    classes: "border-[var(--w-line)] bg-[var(--w-panel)] text-[var(--w-muted)]",
+  },
+  NO_SHOW: {
+    label: "Utebliven",
+    classes: "border-red-500/40 bg-red-500/10 text-red-400",
+  },
+};
+
+function todayLocal(): string {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Stockholm",
+  }).format(new Date());
+  return parts; // sv-SE ger YYYY-MM-DD
+}
+
+function minutesOfDay(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function formatMinutes(m: number): string {
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/** Minuter sedan bokad starttid (negativt = framtid). Browser-lokal tid. */
+function minutesSinceStart(booking: Booking, now: number): number {
+  return Math.floor((now - new Date(booking.startsAt).getTime()) / 60_000);
+}
+
+export function BookingsClient({
+  slug,
+  restaurantId,
+  restaurantName,
+  openingHours,
+}: Props) {
+  const [date, setDate] = useState(() => todayLocal());
+  const [data, setData] = useState<DayData | null>(null);
+  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+  const [selectedTime, setSelectedTime] = useState<number | null>(null);
+  const [selectedBookingId, setSelectedBookingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [live, setLive] = useState(false);
+  const dateRef = useRef(date);
+  useEffect(() => {
+    dateRef.current = date;
+  }, [date]);
+
+  // --- Datahämtning: initial + refetch vid realtime-event/fokus ---
+  const fetchDay = useCallback(
+    async (d: string) => {
+      try {
+        const res = await fetch(`/api/restaurants/${slug}/day?date=${d}`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setError(body.error ?? "Kunde inte hämta bokningar.");
+          return;
+        }
+        const day: DayData = await res.json();
+        setData(day);
+        setActiveRoomId((prev) =>
+          prev && day.rooms.some((r) => r.id === prev)
+            ? prev
+            : (day.rooms[0]?.id ?? null),
+        );
+      } catch {
+        setError("Kunde inte hämta bokningar.");
+      }
+    },
+    [slug],
+  );
+
+  useEffect(() => {
+    const id = setTimeout(() => void fetchDay(date), 0);
+    return () => clearTimeout(id);
+  }, [date, fetchDay]);
+
+  // --- Supabase Realtime: bookings-ändringar för denna restaurang ---
+  useEffect(() => {
+    const supabase = getBrowserSupabase();
+    const channel = supabase
+      .channel(`bookings-${restaurantId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "bookings",
+          filter: `restaurant_id=eq.${restaurantId}`,
+        },
+        () => void fetchDay(dateRef.current),
+      )
+      .subscribe((status: string) => setLive(status === "SUBSCRIBED"));
+
+    const onFocus = () => void fetchDay(dateRef.current);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      void supabase.removeChannel(channel);
+    };
+  }, [restaurantId, fetchDay]);
+
+  // Ticker för countdowns/försenad-status
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // --- Tidsskrubber: 30-min-steg över dagens öppettider ---
+  const weekday = WEEKDAY_KEYS[new Date(`${date}T12:00:00`).getDay()];
+  const timeSlots = useMemo(() => {
+    const ranges = openingHours[weekday] ?? [];
+    const slots: number[] = [];
+    for (const r of ranges) {
+      const close = minutesOfDay(r.close);
+      for (let m = minutesOfDay(r.open); m < close; m += 30) slots.push(m);
+    }
+    return slots;
+  }, [openingHours, weekday]);
+
+  const effectiveTime = useMemo(() => {
+    if (selectedTime !== null && timeSlots.includes(selectedTime))
+      return selectedTime;
+    if (timeSlots.length === 0) return null;
+    if (date === todayLocal()) {
+      const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+      const current = [...timeSlots].reverse().find((s) => s <= nowM);
+      if (current !== undefined) return current;
+    }
+    return timeSlots[0];
+  }, [selectedTime, timeSlots, date]);
+
+  // --- Ögonblicksbild: vilken bokning sitter på vilket bord vid vald tid ---
+  const occupancy = useMemo(() => {
+    const map = new Map<string, Booking>(); // tableId → bokning
+    if (!data || effectiveTime === null) return map;
+    const t = new Date(`${date}T${formatMinutes(effectiveTime)}:00`).getTime();
+    for (const b of data.bookings) {
+      if (!b.tableId || !OCCUPYING.has(b.status)) continue;
+      if (new Date(b.startsAt).getTime() <= t && t < new Date(b.endsAt).getTime()) {
+        map.set(b.tableId, b);
+      }
+    }
+    return map;
+  }, [data, date, effectiveTime]);
+
+  const roomTables = (data?.tables ?? []).filter(
+    (t) => t.roomId === activeRoomId,
+  );
+  const selectedBooking =
+    data?.bookings.find((b) => b.id === selectedBookingId) ?? null;
+
+  /** Markera bokningen OCH hoppa skrubbern till dess tid — så syns
+   *  statusändringar (Anlänt → grönt bord) direkt på kartan. */
+  const focusBooking = useCallback(
+    (b: Booking) => {
+      setSelectedBookingId(b.id);
+      const local = new Date(b.startsAt);
+      const slot = Math.floor((local.getHours() * 60 + local.getMinutes()) / 30) * 30;
+      if (timeSlots.includes(slot)) setSelectedTime(slot);
+      const table = data?.tables.find((t) => t.id === b.tableId);
+      if (table?.roomId) setActiveRoomId(table.roomId);
+    },
+    [timeSlots, data],
+  );
+
+  // --- Åtgärder ---
+  const patchBooking = useCallback(
+    async (id: string, body: { tableId?: string; status?: string }) => {
+      setError(null);
+      const res = await fetch(`/api/restaurants/${slug}/bookings/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Ändringen misslyckades.");
+      }
+      await fetchDay(dateRef.current);
+      return res.ok;
+    },
+    [slug, fetchDay],
+  );
+
+  // --- Drag & drop: från kartan (bord → bord) och från listan (kort → bord) ---
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<{
+    bookingId: string;
+    fromTableId: string;
+    px: number;
+    py: number;
+    startPx: number;
+    startPy: number;
+    moved: boolean;
+    targetTableId: string | null;
+  } | null>(null);
+  const [modalBookingId, setModalBookingId] = useState<string | null>(null);
+  const modalBooking =
+    data?.bookings.find((b) => b.id === modalBookingId) ?? null;
+  const [listDrag, setListDrag] = useState<{
+    bookingId: string;
+    x: number; // viewport-koordinater för spök-chipet
+    y: number;
+    targetTableId: string | null; // giltigt släppmål
+    hoverTableId: string | null; // bordet under pekaren, även ogiltigt
+    hoverLabel: string; // "T11" eller "T11 · rymmer bara 6"
+    hoverValid: boolean;
+  } | null>(null);
+
+  const draggedBookingId = drag?.bookingId ?? listDrag?.bookingId ?? null;
+
+  const validTargets = useMemo(() => {
+    if (!draggedBookingId || !data) return new Set<string>();
+    const booking = data.bookings.find((b) => b.id === draggedBookingId);
+    if (!booking) return new Set<string>();
+    const start = new Date(booking.startsAt).getTime();
+    const end = new Date(booking.endsAt).getTime();
+    const targets = new Set<string>();
+    for (const table of roomTables) {
+      if (table.id === booking.tableId) continue;
+      if (table.capacity < booking.partySize) continue;
+      const busy = data.bookings.some(
+        (b) =>
+          b.id !== booking.id &&
+          b.tableId === table.id &&
+          OCCUPYING.has(b.status) &&
+          new Date(b.startsAt).getTime() < end &&
+          new Date(b.endsAt).getTime() > start,
+      );
+      if (!busy) targets.add(table.id);
+    }
+    return targets;
+  }, [draggedBookingId, data, roomTables]);
+
+  function pointerToSvg(e: React.PointerEvent) {
+    const rect = svgRef.current!.getBoundingClientRect();
+    return {
+      px: ((e.clientX - rect.left) / rect.width) * GRID_W * CELL,
+      py: ((e.clientY - rect.top) / rect.height) * GRID_H * CELL,
+    };
+  }
+
+  function tableAtPoint(px: number, py: number): TableRow | null {
+    for (const t of roomTables) {
+      const shape = toShape(t.shape);
+      const { w, h } = FOOTPRINT[shape];
+      if (
+        px >= t.posX * CELL &&
+        px <= (t.posX + w) * CELL &&
+        py >= t.posY * CELL &&
+        py <= (t.posY + h) * CELL
+      )
+        return t;
+    }
+    return null;
+  }
+
+  function onTablePointerDown(e: React.PointerEvent, table: TableRow) {
+    const booking = occupancy.get(table.id);
+    if (!booking) return;
+    e.preventDefault();
+    setSelectedBookingId(booking.id);
+    (e.currentTarget as SVGGElement).setPointerCapture(e.pointerId);
+    const { px, py } = pointerToSvg(e);
+    setDrag({
+      bookingId: booking.id,
+      fromTableId: table.id,
+      px,
+      py,
+      startPx: px,
+      startPy: py,
+      moved: false,
+      targetTableId: null,
+    });
+  }
+
+  function onTablePointerMove(e: React.PointerEvent) {
+    if (!drag) return;
+    const { px, py } = pointerToSvg(e);
+    const over = tableAtPoint(px, py);
+    // Rörelsetröskel skiljer klick (→ modal) från drag (→ flytt)
+    const moved =
+      drag.moved ||
+      Math.hypot(px - drag.startPx, py - drag.startPy) > 6;
+    setDrag({
+      ...drag,
+      px,
+      py,
+      moved,
+      targetTableId: over && validTargets.has(over.id) ? over.id : null,
+    });
+  }
+
+  async function onTablePointerUp() {
+    if (!drag) return;
+    const { bookingId, targetTableId, moved } = drag;
+    setDrag(null);
+    if (moved) {
+      if (targetTableId) {
+        await patchBooking(bookingId, { tableId: targetTableId });
+      }
+      return;
+    }
+    // Rent klick: öppna gästmodalen för incheckade bord
+    const booking = data?.bookings.find((b) => b.id === bookingId);
+    if (booking?.status === "SEATED") {
+      setModalBookingId(bookingId);
+    }
+  }
+
+  // --- Drag från bokningslistan till ett bord på kartan ---
+  function clientPointToTable(clientX: number, clientY: number): TableRow | null {
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    if (
+      clientX < rect.left ||
+      clientX > rect.right ||
+      clientY < rect.top ||
+      clientY > rect.bottom
+    )
+      return null;
+    const px = ((clientX - rect.left) / rect.width) * GRID_W * CELL;
+    const py = ((clientY - rect.top) / rect.height) * GRID_H * CELL;
+    return tableAtPoint(px, py);
+  }
+
+  function onListDragStart(e: React.PointerEvent, b: Booking) {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // OBS: inte focusBooking här — den byter rumsflik till bokningens
+    // nuvarande rum och skulle rycka undan kartan mitt i dragget
+    setSelectedBookingId(b.id);
+    setListDrag({
+      bookingId: b.id,
+      x: e.clientX,
+      y: e.clientY,
+      targetTableId: null,
+      hoverTableId: null,
+      hoverLabel: "",
+      hoverValid: false,
+    });
+  }
+
+  function onListDragMove(e: React.PointerEvent, b: Booking) {
+    if (!listDrag || listDrag.bookingId !== b.id) return;
+    // Håll dragget över en rumsflik → kartan byter rum (cross-room-flytt)
+    const tabEl = document
+      .elementFromPoint(e.clientX, e.clientY)
+      ?.closest("[data-room-id]");
+    const hoveredRoomId = tabEl?.getAttribute("data-room-id");
+    if (hoveredRoomId && hoveredRoomId !== activeRoomId) {
+      setActiveRoomId(hoveredRoomId);
+    }
+    const over = clientPointToTable(e.clientX, e.clientY);
+    let targetTableId: string | null = null;
+    let hoverLabel = "";
+    let hoverValid = false;
+    if (over) {
+      if (validTargets.has(over.id)) {
+        targetTableId = over.id;
+        hoverLabel = over.name;
+        hoverValid = true;
+      } else if (over.id === b.tableId) {
+        hoverLabel = `${over.name} · nuvarande bord`;
+      } else if (over.capacity < b.partySize) {
+        hoverLabel = `${over.name} · rymmer bara ${over.capacity}`;
+      } else {
+        hoverLabel = `${over.name} · upptaget`;
+      }
+    }
+    setListDrag({
+      bookingId: b.id,
+      x: e.clientX,
+      y: e.clientY,
+      targetTableId,
+      hoverTableId: over?.id ?? null,
+      hoverLabel,
+      hoverValid,
+    });
+  }
+
+  async function onListDragEnd() {
+    if (!listDrag) return;
+    const { bookingId, targetTableId } = listDrag;
+    setListDrag(null);
+    if (targetTableId) {
+      await patchBooking(bookingId, { tableId: targetTableId });
+    }
+  }
+
+  const formatClock = (iso: string) =>
+    new Date(iso).toLocaleTimeString("sv-SE", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  return (
+    <div
+      className="min-h-dvh bg-[var(--w-bg)] text-[var(--w-ink)]"
+      style={
+        {
+          "--w-bg": "#101312",
+          "--w-panel": "#161b19",
+          "--w-line": "#2a312d",
+          "--w-ink": "#ede7dc",
+          "--w-muted": "#8b9389",
+          "--w-accent": "#c89b5a",
+        } as React.CSSProperties
+      }
+    >
+      <header className="flex h-16 items-center gap-4 border-b border-[var(--w-line)] px-6">
+        <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
+          <Image
+            src="/BLWhiteSide.png"
+            alt="BistroLabs"
+            width={138}
+            height={30}
+            className="h-7 w-auto"
+          />
+        </Link>
+        <Link
+          href={`/dashboard/${slug}`}
+          className="text-xs mt-2 text-[var(--w-muted)] hover:text-[var(--w-ink)] transition-colors"
+        >
+          ‹ Översikt
+        </Link>
+        <span
+          className={`mt-2 flex items-center gap-1.5 text-[11px] ${live ? "text-emerald-400" : "text-[var(--w-muted)]"}`}
+          title={live ? "Realtidsuppdatering aktiv" : "Ansluter…"}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-[var(--w-muted)]"}`}
+          />
+          {live ? "Live" : "Ansluter"}
+        </span>
+        <div className="ml-auto flex items-center gap-3">
+          {error && <span className="max-w-md text-xs text-yellow-400">{error}</span>}
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => {
+              setDate(e.target.value);
+              setSelectedTime(null);
+              setSelectedBookingId(null);
+            }}
+            className="h-10 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-3 text-sm focus:border-[var(--w-accent)] focus:outline-none"
+          />
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-6xl px-6 py-8">
+        <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
+          Bokningar
+        </p>
+        <h1 className="mt-1 text-3xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
+          {restaurantName}
+        </h1>
+
+        <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_340px]">
+          {/* Vänster: rum, skrubber, karta */}
+          <div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(data?.rooms ?? []).map((room) => (
+                <button
+                  key={room.id}
+                  data-room-id={room.id}
+                  onClick={() => setActiveRoomId(room.id)}
+                  className={`h-9 rounded-lg border px-3 text-sm transition-colors ${
+                    room.id === activeRoomId
+                      ? "border-[var(--w-accent)] bg-[var(--w-accent)]/10 text-[var(--w-accent)]"
+                      : "border-[var(--w-line)] bg-[var(--w-panel)] text-[var(--w-muted)] hover:text-[var(--w-ink)]"
+                  }`}
+                >
+                  {room.name}
+                </button>
+              ))}
+              <span className="ml-auto flex items-center gap-3 text-[11px] text-[var(--w-muted)]">
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full border border-[var(--w-line)] bg-[var(--w-panel)]" />
+                  Ledig
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full bg-[var(--w-accent)]/70" />
+                  Bokad
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80" />
+                  Sitter
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
+                  Försenad
+                </span>
+              </span>
+            </div>
+
+            {/* Tidsskrubber */}
+            {timeSlots.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-1">
+                {timeSlots.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setSelectedTime(m)}
+                    className={`h-8 rounded-lg border px-2.5 font-mono text-xs transition-colors ${
+                      m === effectiveTime
+                        ? "border-[var(--w-accent)] bg-[var(--w-accent)]/10 text-[var(--w-accent)]"
+                        : "border-[var(--w-line)] text-[var(--w-muted)] hover:text-[var(--w-ink)]"
+                    }`}
+                  >
+                    {formatMinutes(m)}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-[var(--w-muted)]">
+                Stängt denna dag — bokningslistan visas ändå.
+              </p>
+            )}
+
+            {/* Kartan */}
+            <div className="mt-3 overflow-x-auto rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)]">
+              <svg
+                ref={svgRef}
+                viewBox={`0 0 ${GRID_W * CELL} ${GRID_H * CELL}`}
+                className="h-auto w-full touch-none select-none"
+              >
+                <defs>
+                  <pattern
+                    id="day-dots"
+                    width={CELL}
+                    height={CELL}
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <circle cx={CELL / 2} cy={CELL / 2} r={1.3} fill="var(--w-line)" />
+                  </pattern>
+                </defs>
+                <rect
+                  width={GRID_W * CELL}
+                  height={GRID_H * CELL}
+                  fill="url(#day-dots)"
+                />
+                {roomTables.map((table) => (
+                  <DayTableGlyph
+                    key={table.id}
+                    table={table}
+                    booking={occupancy.get(table.id) ?? null}
+                    hasLaterBooking={(data?.bookings ?? []).some(
+                      (b) =>
+                        b.tableId === table.id &&
+                        OCCUPYING.has(b.status) &&
+                        effectiveTime !== null &&
+                        new Date(b.startsAt).getTime() >
+                          new Date(
+                            `${date}T${formatMinutes(effectiveTime)}:00`,
+                          ).getTime(),
+                    )}
+                    now={now}
+                    selected={
+                      !!selectedBooking &&
+                      occupancy.get(table.id)?.id === selectedBooking.id
+                    }
+                    isDragTarget={
+                      (drag?.targetTableId ?? listDrag?.targetTableId) === table.id
+                    }
+                    isValidTarget={validTargets.has(table.id)}
+                    isInvalidHover={
+                      listDrag?.hoverTableId === table.id && !listDrag.hoverValid
+                    }
+                    dragging={draggedBookingId !== null}
+                    onPointerDown={(e) => onTablePointerDown(e, table)}
+                    onPointerMove={onTablePointerMove}
+                    onPointerUp={() => void onTablePointerUp()}
+                  />
+                ))}
+                {/* Ghost-chip som följer pekaren vid drag */}
+                {drag && data && (
+                  <g style={{ pointerEvents: "none" }} opacity={0.9}>
+                    <rect
+                      x={drag.px - 52}
+                      y={drag.py - 14}
+                      width={104}
+                      height={28}
+                      rx={14}
+                      fill="#1e1e1e"
+                      stroke="var(--w-accent)"
+                    />
+                    <text
+                      x={drag.px}
+                      y={drag.py + 4}
+                      textAnchor="middle"
+                      fontSize={10.5}
+                      fill="var(--w-ink)"
+                    >
+                      {data.bookings
+                        .find((b) => b.id === drag.bookingId)
+                        ?.guestName.slice(0, 14) ?? ""}
+                    </text>
+                  </g>
+                )}
+              </svg>
+            </div>
+            <p className="mt-2 text-xs text-[var(--w-muted)]">
+              Dra ⠿-handtaget på en bokning i listan (eller ett upptaget bord på
+              kartan) till ett annat bord — giltiga bord tänds gröna.
+            </p>
+          </div>
+
+          {/* Höger: dagens bokningslista */}
+          <aside>
+            <h2 className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
+              Dagens bokningar ({(data?.bookings ?? []).length})
+            </h2>
+            <div className="mt-3 space-y-2">
+              {(data?.bookings ?? []).length === 0 && (
+                <p className="text-sm text-[var(--w-muted)]">
+                  Inga bokningar denna dag.
+                </p>
+              )}
+              {(data?.bookings ?? []).map((b) => {
+                const meta = STATUS_META[b.status] ?? STATUS_META.PENDING;
+                const table = data?.tables.find((t) => t.id === b.tableId);
+                const late =
+                  date === todayLocal() &&
+                  (b.status === "PENDING" || b.status === "CONFIRMED") &&
+                  minutesSinceStart(b, now) > 0;
+                const sinceStart = minutesSinceStart(b, now);
+                const draggable = OCCUPYING.has(b.status) && b.tableId;
+                return (
+                  <div
+                    key={b.id}
+                    onClick={() => focusBooking(b)}
+                    className={`cursor-pointer rounded-xl border p-3 transition-colors ${
+                      selectedBookingId === b.id
+                        ? "border-[var(--w-accent)] bg-[var(--w-accent)]/5"
+                        : "border-[var(--w-line)] bg-[var(--w-panel)] hover:border-[var(--w-muted)]"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {draggable && (
+                        <span
+                          onPointerDown={(e) => onListDragStart(e, b)}
+                          onPointerMove={(e) => onListDragMove(e, b)}
+                          onPointerUp={() => void onListDragEnd()}
+                          // Släppet avfyrar ett click som annars bubblar till
+                          // kortets onClick → focusBooking → flikbyte till
+                          // bokningens GAMLA rum mitt i släppet
+                          onClick={(e) => e.stopPropagation()}
+                          title="Dra till ett bord på kartan"
+                          className="cursor-grab touch-none select-none rounded px-1 text-[var(--w-muted)] hover:text-[var(--w-accent)]"
+                        >
+                          ⠿
+                        </span>
+                      )}
+                      <span className="font-mono text-sm">
+                        {formatClock(b.startsAt)}
+                      </span>
+                      <span className="truncate text-sm font-medium">
+                        {b.guestName}
+                      </span>
+                      <span className="ml-auto shrink-0 text-xs text-[var(--w-muted)]">
+                        {b.partySize} pers · {table?.name ?? "—"}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${meta.classes}`}
+                      >
+                        {meta.label}
+                      </span>
+                      <span className="text-[10px] text-[var(--w-muted)]">
+                        {b.createdBy === "widget" ? "Widget" : "AI"}
+                      </span>
+                      {late && (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                            sinceStart <= GRACE_MINUTES
+                              ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+                              : "border-red-500/40 bg-red-500/10 text-red-400"
+                          }`}
+                        >
+                          {sinceStart <= GRACE_MINUTES
+                            ? `Släpps om ${GRACE_MINUTES - sinceStart} min`
+                            : `Försenad ${sinceStart} min`}
+                        </span>
+                      )}
+                      <span className="ml-auto flex gap-1">
+                        {(b.status === "PENDING" || b.status === "CONFIRMED") && (
+                          <>
+                            <ActionButton
+                              label="Anlänt"
+                              tone="green"
+                              onClick={() => {
+                                focusBooking(b);
+                                void patchBooking(b.id, { status: "SEATED" });
+                              }}
+                            />
+                            {late && (
+                              <ActionButton
+                                label="Släpp bordet"
+                                tone="red"
+                                onClick={() => {
+                                  focusBooking(b);
+                                  void patchBooking(b.id, { status: "NO_SHOW" });
+                                }}
+                              />
+                            )}
+                            <ActionButton
+                              label="Avboka"
+                              tone="neutral"
+                              onClick={() => {
+                                focusBooking(b);
+                                void patchBooking(b.id, { status: "CANCELLED" });
+                              }}
+                            />
+                          </>
+                        )}
+                        {b.status === "SEATED" && (
+                          <ActionButton
+                            label="Avsluta"
+                            tone="neutral"
+                            onClick={() => {
+                              focusBooking(b);
+                              void patchBooking(b.id, { status: "COMPLETED" });
+                            }}
+                          />
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+      </main>
+
+      {/* Gästmodal: klick (utan drag) på ett incheckat bord */}
+      {modalBooking && (
+        <GuestModal
+          booking={modalBooking}
+          tableName={
+            data?.tables.find((t) => t.id === modalBooking.tableId)?.name ?? "Bord"
+          }
+          now={now}
+          onComplete={() => {
+            setModalBookingId(null);
+            void patchBooking(modalBooking.id, { status: "COMPLETED" });
+          }}
+          onClose={() => setModalBookingId(null)}
+        />
+      )}
+
+      {/* Spök-chip som följer pekaren när en bokning dras från listan —
+          visar även VARFÖR ett bord inte går att släppa på */}
+      {listDrag && data && (
+        <div
+          className={`pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-[#1e1e1e] px-3 py-1.5 text-xs shadow-lg ${
+            listDrag.hoverTableId && !listDrag.hoverValid
+              ? "border-red-400/70 text-red-300"
+              : "border-[var(--w-accent)] text-[var(--w-ink)]"
+          }`}
+          style={{ left: listDrag.x, top: listDrag.y }}
+        >
+          {data.bookings.find((b) => b.id === listDrag.bookingId)?.guestName}
+          {listDrag.hoverLabel ? ` → ${listDrag.hoverLabel}` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GuestModal({
+  booking,
+  tableName,
+  now,
+  onComplete,
+  onClose,
+}: {
+  booking: Booking;
+  tableName: string;
+  now: number;
+  onComplete: () => void;
+  onClose: () => void;
+}) {
+  const seatedMinutes = booking.seatedAt
+    ? Math.max(0, Math.floor((now - new Date(booking.seatedAt).getTime()) / 60_000))
+    : null;
+  const clock = (iso: string) =>
+    new Date(iso).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+  const dateTime = (iso: string) =>
+    new Date(iso).toLocaleString("sv-SE", {
+      day: "numeric",
+      month: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-label={`Gästinfo för ${booking.guestName}`}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
+              {tableName} · {booking.partySize} pers
+            </p>
+            <h3 className="mt-1 text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
+              {booking.guestName}
+            </h3>
+          </div>
+          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
+            Sitter
+          </span>
+        </div>
+
+        <dl className="mt-5 space-y-3 text-sm">
+          <div className="flex justify-between gap-4">
+            <dt className="text-[var(--w-muted)]">Anlände</dt>
+            <dd className="font-mono">
+              {booking.seatedAt ? clock(booking.seatedAt) : "—"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-[var(--w-muted)]">Har suttit</dt>
+            <dd className="font-mono">
+              {seatedMinutes !== null ? `${seatedMinutes} min` : "—"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-[var(--w-muted)]">Bokad tid</dt>
+            <dd className="font-mono">{clock(booking.startsAt)}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-[var(--w-muted)]">Bokningen gjordes</dt>
+            <dd>{dateTime(booking.createdAt)}</dd>
+          </div>
+          {booking.notes && (
+            <div className="flex justify-between gap-4">
+              <dt className="text-[var(--w-muted)]">Önskemål</dt>
+              <dd className="text-right">{booking.notes}</dd>
+            </div>
+          )}
+        </dl>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onComplete}
+            className="h-9 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+          >
+            Avsluta besöket
+          </button>
+          <button
+            onClick={onClose}
+            className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] hover:brightness-110 transition"
+          >
+            Stäng
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActionButton({
+  label,
+  tone,
+  onClick,
+}: {
+  label: string;
+  tone: "green" | "red" | "neutral";
+  onClick: () => void;
+}) {
+  const tones = {
+    green:
+      "border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10",
+    red: "border-red-500/40 text-red-400 hover:bg-red-500/10",
+    neutral:
+      "border-[var(--w-line)] text-[var(--w-muted)] hover:text-[var(--w-ink)]",
+  };
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`rounded-lg border px-2 py-0.5 text-[10px] font-medium transition-colors ${tones[tone]}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function DayTableGlyph({
+  table,
+  booking,
+  hasLaterBooking,
+  now,
+  selected,
+  isDragTarget,
+  isValidTarget,
+  isInvalidHover,
+  dragging,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+}: {
+  table: TableRow;
+  booking: Booking | null;
+  hasLaterBooking: boolean;
+  now: number;
+  selected: boolean;
+  isDragTarget: boolean;
+  isValidTarget: boolean;
+  isInvalidHover: boolean;
+  dragging: boolean;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+}) {
+  const shape: Shape = toShape(table.shape);
+  const { w: fw, h: fh } = FOOTPRINT[shape];
+  const x = table.posX * CELL;
+  const y = table.posY * CELL;
+  const w = fw * CELL;
+  const h = fh * CELL;
+  const cx = w / 2;
+  const cy = h / 2;
+
+  const sinceStart = booking
+    ? Math.floor((now - new Date(booking.startsAt).getTime()) / 60_000)
+    : 0;
+  // Timern räknar från faktisk incheckning (seatedAt), inte bokad tid
+  const seatedMinutes =
+    booking?.seatedAt != null
+      ? Math.max(0, Math.floor((now - new Date(booking.seatedAt).getTime()) / 60_000))
+      : null;
+  const late =
+    booking &&
+    (booking.status === "PENDING" || booking.status === "CONFIRMED") &&
+    sinceStart > 0;
+
+  let stroke = "var(--w-line)";
+  let fill = "#1e1e1e";
+  if (booking) {
+    if (booking.status === "SEATED") {
+      stroke = "#34d399";
+      fill = "rgba(16,185,129,0.12)";
+    } else if (late && sinceStart > GRACE_MINUTES) {
+      stroke = "#f87171";
+      fill = "rgba(248,113,113,0.12)";
+    } else if (late) {
+      stroke = "#facc15";
+      fill = "rgba(250,204,21,0.10)";
+    } else {
+      stroke = "var(--w-accent)";
+      fill = "rgba(200,155,90,0.10)";
+    }
+  }
+  if (dragging && isValidTarget) stroke = "#34d399";
+  if (isDragTarget) {
+    stroke = "#34d399";
+    fill = "rgba(16,185,129,0.22)";
+  }
+  if (isInvalidHover) {
+    stroke = "#f87171";
+    fill = "rgba(248,113,113,0.10)";
+  }
+
+  const chairs = chairPositions(table.capacity, w, h);
+  const inset = 15;
+
+  return (
+    <g
+      transform={`translate(${x}, ${y})`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      style={{ cursor: booking ? "grab" : "default", outline: "none" }}
+      aria-label={
+        booking
+          ? `${table.name}: ${booking.guestName}, ${booking.partySize} personer`
+          : `${table.name}: ledigt`
+      }
+    >
+      {chairs.map((c, i) => (
+        <circle
+          key={i}
+          cx={c.x}
+          cy={c.y}
+          r={4.5}
+          fill="#2e2e2e"
+          stroke={stroke}
+          strokeWidth={1}
+        />
+      ))}
+      {shape === "round" ? (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={Math.min(w, h) / 2 - inset}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={selected ? 2.5 : 1.4}
+        />
+      ) : (
+        <rect
+          x={inset}
+          y={inset}
+          width={w - inset * 2}
+          height={h - inset * 2}
+          rx={10}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={selected ? 2.5 : 1.4}
+        />
+      )}
+      <text
+        x={cx}
+        y={booking ? cy - 8 : cy - 2}
+        textAnchor="middle"
+        fontSize={10.5}
+        fontWeight={600}
+        fill="var(--w-ink)"
+        style={{ pointerEvents: "none" }}
+      >
+        {table.name}
+      </text>
+      {booking ? (
+        <>
+          <text
+            x={cx}
+            y={cy + 4}
+            textAnchor="middle"
+            fontSize={9}
+            fill="var(--w-ink)"
+            style={{ pointerEvents: "none" }}
+          >
+            {booking.guestName.slice(0, 13)}
+          </text>
+          <text
+            x={cx}
+            y={cy + 15}
+            textAnchor="middle"
+            fontSize={8}
+            fill={
+              late
+                ? sinceStart > GRACE_MINUTES
+                  ? "#f87171"
+                  : "#facc15"
+                : "var(--w-muted)"
+            }
+            style={{ pointerEvents: "none" }}
+          >
+            {late
+              ? sinceStart > GRACE_MINUTES
+                ? `Försenad ${sinceStart}m`
+                : `Släpps om ${GRACE_MINUTES - sinceStart}m`
+              : booking.status === "SEATED"
+                ? `Sitter${seatedMinutes !== null ? ` · ${seatedMinutes} min` : ""}`
+                : `${booking.partySize} pers`}
+          </text>
+        </>
+      ) : (
+        <text
+          x={cx}
+          y={cy + 10}
+          textAnchor="middle"
+          fontSize={8}
+          fill="var(--w-muted)"
+          style={{ pointerEvents: "none" }}
+        >
+          {hasLaterBooking ? "bokad senare" : "ledig"}
+        </text>
+      )}
+    </g>
+  );
+}

@@ -265,7 +265,7 @@ export async function createBooking(
 }
 
 /** Träff på exclusion-constrainten bookings_no_overlap (SQLSTATE 23P01). */
-function isOverlapViolation(e: unknown): boolean {
+export function isOverlapViolation(e: unknown): boolean {
   if (!e || typeof e !== "object") return false;
   const text = `${"message" in e ? e.message : ""}${JSON.stringify(
     "meta" in e ? e.meta : "",

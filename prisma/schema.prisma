@@ -29,6 +29,7 @@ enum Intent {
 enum BookingStatus {
   PENDING
   CONFIRMED
+  SEATED // gästen har checkats in vid bordet
   CANCELLED
   COMPLETED
   NO_SHOW
@@ -173,6 +174,8 @@ model Booking {
   endsAt       DateTime      @map("ends_at")
   partySize    Int           @map("party_size")
   status       BookingStatus @default(PENDING)
+  /// När gästen checkades in (status → SEATED) — driver "Sitter · X min"-timern
+  seatedAt     DateTime?     @map("seated_at")
   notes        String?
   createdBy    String        @default("concierge") @map("created_by") // "concierge" | "human"
   createdAt    DateTime      @default(now()) @map("created_at")

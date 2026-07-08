@@ -1,13 +1,21 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import {
+  GRID_W,
+  GRID_H,
+  CELL,
+  FOOTPRINT,
+  cellsFor,
+  seatsLabel,
+  toShape,
+  type Shape,
+} from "@/lib/floor-plan";
 
 // Bordskartan: rum som flikar, snap-grid-canvas i SVG där bord dras på plats.
 // Stolarna ritas runt varje bord (antal = kapacitet). Min–max platser styr
 // allokeringen: "endast 2" = min 2/max 2. Sparas som helhet via
 // PUT /api/restaurants/{slug}/floor-plan.
-
-type Shape = "round" | "square" | "rect";
 
 export type PlanRoom = { id?: string; key: string; name: string };
 export type PlanTable = {
@@ -39,22 +47,12 @@ type Props = {
   }[];
 };
 
-const GRID_W = 16;
-const GRID_H = 10;
-const CELL = 44;
-
 // Röd släpp-yta nere till höger — syns bara medan ett bord dras
 const DELETE_ZONE = {
   x: GRID_W * CELL - 158,
   y: GRID_H * CELL - 66,
   w: 148,
   h: 56,
-};
-
-const FOOTPRINT: Record<Shape, { w: number; h: number }> = {
-  round: { w: 2, h: 2 },
-  square: { w: 2, h: 2 },
-  rect: { w: 3, h: 2 },
 };
 
 const PALETTE: { label: string; shape: Shape; capacity: number }[] = [
@@ -67,21 +65,6 @@ const PALETTE: { label: string; shape: Shape; capacity: number }[] = [
 const clamp = (v: number, min: number, max: number) =>
   Math.min(max, Math.max(min, v));
 
-function cellsFor(t: { posX: number; posY: number; shape: Shape }): string[] {
-  const { w, h } = FOOTPRINT[t.shape];
-  const cells: string[] = [];
-  for (let dx = 0; dx < w; dx++)
-    for (let dy = 0; dy < h; dy++) cells.push(`${t.posX + dx},${t.posY + dy}`);
-  return cells;
-}
-
-function seatsLabel(t: { minSeats: number; capacity: number }): string {
-  return t.minSeats === t.capacity
-    ? `exakt ${t.capacity}`
-    : t.minSeats > 1
-      ? `${t.minSeats}–${t.capacity}`
-      : `1–${t.capacity}`;
-}
 
 export function FloorPlanner({ slug, initialRooms, initialTables }: Props) {
   const idCounter = useRef(0);
@@ -101,9 +84,7 @@ export function FloorPlanner({ slug, initialRooms, initialTables }: Props) {
       name: t.name,
       capacity: t.capacity,
       minSeats: t.minSeats,
-      shape: (["round", "square", "rect"] as const).includes(t.shape as Shape)
-        ? (t.shape as Shape)
-        : "round",
+      shape: toShape(t.shape),
       posX: clamp(t.posX, 0, GRID_W - 2),
       posY: clamp(t.posY, 0, GRID_H - 2),
       bookingCount: t.bookingCount,

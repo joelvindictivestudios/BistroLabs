@@ -125,6 +125,8 @@ model Guest {
 model GuestProfile {
   guestId             String    @id @map("guest_id") @db.Uuid
   preferences         Json      @default("{}")
+  /// Övriga upplysningar/allergier — fritext från kundformen (widget/admin)
+  notes               String?
   dietaryRestrictions String[]  @map("dietary_restrictions")
   favoriteTable       String?   @map("favorite_table")
   visitCount          Int       @default(0) @map("visit_count")
@@ -173,6 +175,8 @@ model Booking {
   startsAt     DateTime      @map("starts_at")
   endsAt       DateTime      @map("ends_at")
   partySize    Int           @map("party_size")
+  /// Varav barn — ingår i partySize, info till kök/personal
+  childrenCount Int          @default(0) @map("children_count")
   status       BookingStatus @default(PENDING)
   /// När gästen checkades in (status → SEATED) — driver "Sitter · X min"-timern
   seatedAt     DateTime?     @map("seated_at")

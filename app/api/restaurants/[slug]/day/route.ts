@@ -69,9 +69,11 @@ export async function GET(
     bookings: bookings.map((b) => ({
       id: b.id,
       tableId: b.tableId,
+      guestId: b.guestId,
       startsAt: b.startsAt.toISOString(),
       endsAt: b.endsAt.toISOString(),
       partySize: b.partySize,
+      childrenCount: b.childrenCount,
       status: b.status,
       seatedAt: b.seatedAt?.toISOString() ?? null,
       createdAt: b.createdAt.toISOString(),

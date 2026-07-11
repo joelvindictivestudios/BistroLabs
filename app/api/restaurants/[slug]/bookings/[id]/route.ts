@@ -10,10 +10,15 @@ const patchSchema = z
     status: z
       .enum(["CONFIRMED", "SEATED", "COMPLETED", "NO_SHOW", "CANCELLED"])
       .optional(),
+    guestId: z.uuid().optional(), // koppla drop-in till en riktig kund
   })
-  .refine((d) => d.tableId !== undefined || d.status !== undefined, {
-    message: "Ange tableId och/eller status",
-  });
+  .refine(
+    (d) =>
+      d.tableId !== undefined ||
+      d.status !== undefined ||
+      d.guestId !== undefined,
+    { message: "Ange tableId, status och/eller guestId" },
+  );
 
 // PATCH /api/restaurants/{slug}/bookings/{id} — personalens verktyg i dagvyn:
 // flytta bokning till annat bord (drag & drop) och/eller ändra status
@@ -52,7 +57,16 @@ export async function PATCH(
       { status: 400 },
     );
   }
-  const { tableId, status } = parsed.data;
+  const { tableId, status, guestId } = parsed.data;
+
+  if (guestId !== undefined) {
+    const guest = await prisma.guest.findFirst({
+      where: { id: guestId, restaurantId: restaurant.id },
+    });
+    if (!guest) {
+      return NextResponse.json({ error: "Okänd kund." }, { status: 404 });
+    }
+  }
 
   // Flytt: kapacitet är ett hårt krav (fysiskt), minSeats ignoreras — personalen
   // vet bäst när de möblerar om. Tidskrockar stoppas av bookings_no_overlap.
@@ -79,6 +93,7 @@ export async function PATCH(
       data: {
         ...(tableId !== undefined ? { tableId } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...(guestId !== undefined ? { guestId } : {}),
         // Incheckningstid stämplas när gästen anländer — driver Sitter-timern
         ...(status === "SEATED" ? { seatedAt: new Date() } : {}),
       },

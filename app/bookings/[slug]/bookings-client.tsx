@@ -37,9 +37,11 @@ type TableRow = {
 type Booking = {
   id: string;
   tableId: string | null;
+  guestId: string | null;
   startsAt: string;
   endsAt: string;
   partySize: number;
+  childrenCount: number;
   status: string;
   seatedAt: string | null;
   createdAt: string;
@@ -252,7 +254,10 @@ export function BookingsClient({
 
   // --- Åtgärder ---
   const patchBooking = useCallback(
-    async (id: string, body: { tableId?: string; status?: string }) => {
+    async (
+      id: string,
+      body: { tableId?: string; status?: string; guestId?: string },
+    ) => {
       setError(null);
       const res = await fetch(`/api/restaurants/${slug}/bookings/${id}`, {
         method: "PATCH",
@@ -284,6 +289,8 @@ export function BookingsClient({
   const [modalBookingId, setModalBookingId] = useState<string | null>(null);
   const modalBooking =
     data?.bookings.find((b) => b.id === modalBookingId) ?? null;
+  const [dropInOpen, setDropInOpen] = useState(false);
+  const [attachBookingId, setAttachBookingId] = useState<string | null>(null);
   const [listDrag, setListDrag] = useState<{
     bookingId: string;
     x: number; // viewport-koordinater för spök-chipet
@@ -533,6 +540,12 @@ export function BookingsClient({
             }}
             className="h-10 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-3 text-sm focus:border-[var(--w-accent)] focus:outline-none"
           />
+          <button
+            onClick={() => setDropInOpen(true)}
+            className="h-10 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] shadow-lg shadow-black/25 hover:brightness-110 transition"
+          >
+            + Drop-in
+          </button>
         </div>
       </header>
 
@@ -756,8 +769,28 @@ export function BookingsClient({
                         {meta.label}
                       </span>
                       <span className="text-[10px] text-[var(--w-muted)]">
-                        {b.createdBy === "widget" ? "Widget" : "AI"}
+                        {b.createdBy === "widget"
+                          ? "Widget"
+                          : b.createdBy === "dropin"
+                            ? "Drop-in"
+                            : "AI"}
                       </span>
+                      {b.childrenCount > 0 && (
+                        <span className="text-[10px] text-[var(--w-muted)]">
+                          varav {b.childrenCount} barn
+                        </span>
+                      )}
+                      {b.guestName === "Drop-in" && OCCUPYING.has(b.status) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAttachBookingId(b.id);
+                          }}
+                          className="rounded-lg border border-[var(--w-accent)]/50 px-2 py-0.5 text-[10px] font-medium text-[var(--w-accent)] hover:bg-[var(--w-accent)]/10 transition"
+                        >
+                          Koppla kund
+                        </button>
+                      )}
                       {late && (
                         <span
                           className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
@@ -835,6 +868,35 @@ export function BookingsClient({
             void patchBooking(modalBooking.id, { status: "COMPLETED" });
           }}
           onClose={() => setModalBookingId(null)}
+        />
+      )}
+
+      {/* Drop-in: personalens direktbokning (bypassar gästspärrarna) */}
+      {dropInOpen && data && (
+        <DropInModal
+          slug={slug}
+          date={date}
+          timeSlots={timeSlots}
+          tables={data.tables}
+          rooms={data.rooms}
+          onClose={() => setDropInOpen(false)}
+          onCreated={() => {
+            setDropInOpen(false);
+            void fetchDay(dateRef.current);
+          }}
+        />
+      )}
+
+      {/* Koppla drop-in-bokning till en riktig kund */}
+      {attachBookingId && (
+        <AttachGuestModal
+          slug={slug}
+          onClose={() => setAttachBookingId(null)}
+          onAttach={async (guestId) => {
+            const id = attachBookingId;
+            setAttachBookingId(null);
+            await patchBooking(id, { guestId });
+          }}
         />
       )}
 
@@ -1168,5 +1230,413 @@ function DayTableGlyph({
         </text>
       )}
     </g>
+  );
+}
+
+type GuestHit = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  notes: string;
+};
+
+function DropInModal({
+  slug,
+  date,
+  timeSlots,
+  tables,
+  rooms,
+  onClose,
+  onCreated,
+}: {
+  slug: string;
+  date: string;
+  timeSlots: number[];
+  tables: TableRow[];
+  rooms: Room[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  // Default: närmaste kommande slot idag, annars första
+  const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+  const defaultSlot =
+    timeSlots.find((m) => m >= nowM) ?? timeSlots[0] ?? 17 * 60;
+  const [time, setTime] = useState(formatMinutes(defaultSlot));
+  const [party, setParty] = useState(2);
+  const [children, setChildren] = useState(0);
+  const [tableId, setTableId] = useState<string>(""); // "" = auto
+  const [onSite, setOnSite] = useState(true);
+  const [guest, setGuest] = useState<GuestHit | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/restaurants/${slug}/bookings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date,
+          time,
+          partySize: party,
+          childrenCount: Math.min(children, party),
+          ...(tableId ? { tableId } : {}),
+          ...(guest ? { guestId: guest.id } : {}),
+          onSite,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Kunde inte skapa bokningen.");
+        return;
+      }
+      onCreated();
+    } catch {
+      setError("Något gick fel — prova igen.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fitting = tables.filter((t) => t.capacity >= party);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-label="Ny drop-in-bokning"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
+      >
+        <h3 className="text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
+          Ny drop-in · {date}
+        </h3>
+        <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
+          <label>
+            <span className="text-xs text-[var(--w-muted)]">Tid</span>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-2 py-1.5 font-mono text-sm focus:border-[var(--w-accent)] focus:outline-none"
+            />
+          </label>
+          <label>
+            <span className="text-xs text-[var(--w-muted)]">Bord</span>
+            <select
+              value={tableId}
+              onChange={(e) => setTableId(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-2 py-1.5 text-sm focus:border-[var(--w-accent)] focus:outline-none"
+            >
+              <option value="">Auto (minsta lediga)</option>
+              {fitting.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.capacity} pl,{" "}
+                  {rooms.find((r) => r.id === t.roomId)?.name ?? "—"})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="text-xs text-[var(--w-muted)]">Antal gäster</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={party}
+              onChange={(e) =>
+                setParty(Math.max(1, Number(e.target.value) || 1))
+              }
+              className="mt-1 w-full rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-2 py-1.5 font-mono text-sm focus:border-[var(--w-accent)] focus:outline-none"
+            />
+          </label>
+          <label>
+            <span className="text-xs text-[var(--w-muted)]">Varav barn</span>
+            <input
+              type="number"
+              min={0}
+              max={party}
+              value={children}
+              onChange={(e) =>
+                setChildren(Math.max(0, Number(e.target.value) || 0))
+              }
+              className="mt-1 w-full rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-2 py-1.5 font-mono text-sm focus:border-[var(--w-accent)] focus:outline-none"
+            />
+          </label>
+        </div>
+
+        <label className="mt-4 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={onSite}
+            onChange={(e) => setOnSite(e.target.checked)}
+            className="accent-[var(--w-accent)]"
+          />
+          Gästen är på plats (checkas in direkt)
+        </label>
+
+        <div className="mt-4">
+          <span className="text-xs text-[var(--w-muted)]">
+            Kund (valfritt — kan kopplas i efterhand)
+          </span>
+          {guest ? (
+            <div className="mt-1 flex items-center gap-2 text-sm">
+              <span className="rounded-full border border-[var(--w-accent)]/50 bg-[var(--w-accent)]/10 px-3 py-1 text-xs text-[var(--w-accent)]">
+                {guest.name ?? guest.email ?? guest.phone}
+              </span>
+              <button
+                onClick={() => setGuest(null)}
+                className="text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)]"
+              >
+                ✕ ta bort
+              </button>
+            </div>
+          ) : (
+            <GuestSearch slug={slug} onPick={setGuest} />
+          )}
+        </div>
+
+        {error && <p className="mt-3 text-xs text-yellow-400">{error}</p>}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="h-9 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+          >
+            Avbryt
+          </button>
+          <button
+            onClick={() => void create()}
+            disabled={saving}
+            className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] hover:brightness-110 disabled:opacity-60 transition"
+          >
+            {saving ? "Skapar…" : "Skapa bokning"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuestSearch({
+  slug,
+  onPick,
+}: {
+  slug: string;
+  onPick: (guest: GuestHit) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<GuestHit[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  async function search() {
+    if (!q.trim()) return;
+    setSearching(true);
+    try {
+      const res = await fetch(
+        `/api/restaurants/${slug}/guests?q=${encodeURIComponent(q.trim())}`,
+      );
+      const data = await res.json();
+      setHits(res.ok ? data.guests : []);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      <div className="flex gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void search();
+          }}
+          placeholder="Sök namn, e-post eller telefon…"
+          className="h-9 flex-1 rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-3 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
+        />
+        <button
+          onClick={() => void search()}
+          disabled={searching}
+          className="h-9 rounded-lg border border-[var(--w-line)] px-3 text-xs hover:border-[var(--w-accent)] disabled:opacity-50 transition"
+        >
+          {searching ? "…" : "Sök"}
+        </button>
+      </div>
+      {hits.length > 0 && (
+        <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto">
+          {hits.map((g) => (
+            <li key={g.id}>
+              <button
+                onClick={() => onPick(g)}
+                className="w-full rounded-lg border border-[var(--w-line)] px-3 py-1.5 text-left text-xs hover:border-[var(--w-accent)] transition"
+              >
+                <span className="font-medium">{g.name ?? "—"}</span>{" "}
+                <span className="text-[var(--w-muted)]">
+                  {g.email ?? ""} {g.phone ?? ""}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function AttachGuestModal({
+  slug,
+  onClose,
+  onAttach,
+}: {
+  slug: string;
+  onClose: () => void;
+  onAttach: (guestId: string) => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function createAndAttach() {
+    if (!email.trim() && !phone.trim()) {
+      setError("Ange e-post eller telefonnummer.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/restaurants/${slug}/guests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim() || undefined,
+          email: email.trim() || undefined,
+          phone: phone.trim() || undefined,
+          notes: notes.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.guestId) {
+        // Kunden fanns redan — koppla den direkt
+        onAttach(data.guestId);
+        return;
+      }
+      if (!res.ok) {
+        setError(data.error ?? "Kunde inte skapa kunden.");
+        return;
+      }
+      onAttach(data.id);
+    } catch {
+      setError("Något gick fel — prova igen.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-label="Koppla kund till bokningen"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
+      >
+        <h3 className="text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
+          Koppla kund
+        </h3>
+        <p className="mt-1 text-xs text-[var(--w-muted)]">
+          Sök en befintlig kund eller registrera en ny — bokningen knyts till
+          kundbilden.
+        </p>
+
+        {!creating ? (
+          <>
+            <div className="mt-4">
+              <GuestSearch slug={slug} onPick={(g) => onAttach(g.id)} />
+            </div>
+            <button
+              onClick={() => setCreating(true)}
+              className="mt-4 h-9 w-full rounded-xl border border-dashed border-[var(--w-line)] text-sm text-[var(--w-muted)] hover:border-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+            >
+              + Registrera ny kund
+            </button>
+          </>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Namn (valfritt)"
+              className={inputClass}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                type="email"
+                placeholder="E-post"
+                className={inputClass}
+              />
+              <input
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="Telefon"
+                className={inputClass}
+              />
+            </div>
+            <input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Övriga upplysningar / allergier (valfritt)"
+              className={inputClass}
+            />
+            <p className="text-xs text-[var(--w-muted)]">
+              E-post eller telefonnummer krävs.
+            </p>
+            {error && <p className="text-xs text-yellow-400">{error}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                onClick={() => setCreating(false)}
+                className="h-9 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+              >
+                Tillbaka
+              </button>
+              <button
+                onClick={() => void createAndAttach()}
+                disabled={saving}
+                className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] hover:brightness-110 disabled:opacity-60 transition"
+              >
+                {saving ? "Sparar…" : "Skapa & koppla"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end">
+          <button
+            onClick={onClose}
+            className="text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+          >
+            Stäng
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -68,6 +68,11 @@ export async function checkAvailability(
     return { available: false, reason: "Ogiltigt datum- eller tidsformat" };
   }
 
+  // Röd dag: restaurangen är stängd — gäller alla kanaler, även personal
+  if (config.closedDates.includes(date)) {
+    return { available: false, reason: `Stängt ${date} (röd dag)` };
+  }
+
   // Öppettider: hela bokningen (start → start + duration) måste rymmas i ett pass
   const weekday = WEEKDAY_KEYS[new Date(`${date}T12:00:00Z`).getUTCDay()];
   const ranges = config.openingHours[weekday] ?? [];
@@ -148,6 +153,7 @@ export async function listAvailableSlots(
   stepMinutes = 30,
 ): Promise<string[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+  if (config.closedDates.includes(date)) return []; // röd dag
   const weekday = WEEKDAY_KEYS[new Date(`${date}T12:00:00Z`).getUTCDay()];
   const ranges = config.openingHours[weekday] ?? [];
 

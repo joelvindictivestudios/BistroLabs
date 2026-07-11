@@ -120,6 +120,9 @@ export async function POST(request: NextRequest) {
     heroImageUrl: body.heroImageUrl,
     logoUrl: "",
     address: "",
+    closedDates: [],
+    bookingStopDates: [],
+    sameDayCutoff: "14:00",
     voiceAgent: {
       voice: "coral",
       greeting: "",

@@ -1,6 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client";
 import { checkAvailability, createBooking } from "../booking/availability";
+import { guestBookingBlocked } from "../booking/rules";
 import type { RestaurantConfig, ToolCallRecord } from "./types";
 
 export const toolDefinitions: ChatCompletionTool[] = [
@@ -65,7 +66,10 @@ export async function executeTool(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   switch (name) {
-    case "check_availability":
+    case "check_availability": {
+      // AI:n är en gästkanal — samma spärrar som widgeten
+      const blocked = guestBookingBlocked(ctx.config, String(args.date));
+      if (blocked) return { available: false, reason: blocked };
       return checkAvailability(
         ctx.restaurantId,
         ctx.config,
@@ -73,7 +77,10 @@ export async function executeTool(
         String(args.time),
         Number(args.party_size),
       );
-    case "create_booking":
+    }
+    case "create_booking": {
+      const blocked = guestBookingBlocked(ctx.config, String(args.date));
+      if (blocked) return { ok: false, reason: blocked };
       return createBooking(
         ctx.restaurantId,
         ctx.config,
@@ -83,6 +90,7 @@ export async function executeTool(
         Number(args.party_size),
         args.notes ? String(args.notes) : undefined,
       );
+    }
     case "get_guest_profile": {
       const profile = await prisma.guestProfile.findUnique({
         where: { guestId: ctx.guestId },

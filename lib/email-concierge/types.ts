@@ -43,6 +43,12 @@ export const restaurantConfigSchema = z.object({
   logoUrl: z.string().default(""),
   /** Gatuadress — krävs innan Bokningsassistenten kan aktiveras. */
   address: z.string().default(""),
+  /** Röda dagar (YYYY-MM-DD): stängt helt — inga bokningar, oavsett kanal. */
+  closedDates: z.array(z.string()).default([]),
+  /** Bokningsstopp (YYYY-MM-DD): öppet, men gästkanaler kan inte boka nytt. */
+  bookingStopDates: z.array(z.string()).default([]),
+  /** Klockslag (HH:MM) efter vilket gäster inte kan boka för samma dag. null = av. */
+  sameDayCutoff: z.string().nullable().default("14:00"),
   /** Telefonagentens inställningar (Bokningsassistenten). */
   voiceAgent: z
     .object({

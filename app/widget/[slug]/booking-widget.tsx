@@ -97,7 +97,10 @@ export function BookingWidget({
         .then((r) => r.json())
         .then((data) => {
           if (requestId !== slotsRequestId.current) return;
-          if (Array.isArray(data.slots)) setSlots(data.slots);
+          if (data.blockedReason) {
+            setSlots([]);
+            setSlotsError(data.blockedReason);
+          } else if (Array.isArray(data.slots)) setSlots(data.slots);
           else setSlotsError(data.error ?? "Kunde inte hämta tider");
         })
         .catch(() => {
@@ -536,10 +539,18 @@ function DetailsForm({
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [children, setChildren] = useState(0);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    // E-post ELLER telefon krävs — namn är valfritt
+    const phone = String(form.get("phone") ?? "").trim();
+    const email = String(form.get("email") ?? "").trim();
+    if (!phone && !email) {
+      setError("Ange e-post eller telefonnummer.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -550,9 +561,10 @@ function DetailsForm({
           date,
           time,
           partySize: party,
-          name: String(form.get("name") ?? ""),
-          phone: String(form.get("phone") ?? ""),
-          email: String(form.get("email") ?? ""),
+          childrenCount: children,
+          name: String(form.get("name") ?? "").trim() || undefined,
+          phone: String(form.get("phone") ?? "").trim() || undefined,
+          email: String(form.get("email") ?? "").trim() || undefined,
           notes:
             [
               offeringTitle ? `Sittning: ${offeringTitle}` : null,
@@ -581,30 +593,54 @@ function DetailsForm({
   return (
     <StepShell label="Dina uppgifter">
       <form onSubmit={handleSubmit} className="space-y-4">
+        <input
+          name="name"
+          placeholder="Namn (valfritt)"
+          autoComplete="name"
+          className={inputClass}
+        />
         <div className="grid grid-cols-2 gap-4">
           <input
-            name="name"
-            required
-            placeholder="Namn"
-            autoComplete="name"
-            className={inputClass}
-          />
-          <input
             name="phone"
-            required
             placeholder="Telefon"
             autoComplete="tel"
             className={inputClass}
           />
+          <input
+            name="email"
+            type="email"
+            placeholder="E-post"
+            autoComplete="email"
+            className={inputClass}
+          />
         </div>
-        <input
-          name="email"
-          type="email"
-          required
-          placeholder="E-post"
-          autoComplete="email"
-          className={inputClass}
-        />
+        <p className="text-xs text-[var(--w-muted)]">
+          Ange e-post eller telefonnummer så vi kan nå dig om bokningen.
+        </p>
+        {party !== null && party > 1 && (
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-[var(--w-muted)]">Varav barn:</span>
+            <button
+              type="button"
+              onClick={() => setChildren(Math.max(0, children - 1))}
+              disabled={children <= 0}
+              aria-label="Färre barn"
+              className="h-8 w-8 rounded-lg border border-[var(--w-line)] disabled:opacity-30"
+            >
+              −
+            </button>
+            <span className="w-5 text-center font-mono">{children}</span>
+            <button
+              type="button"
+              onClick={() => setChildren(Math.min(party, children + 1))}
+              disabled={children >= party}
+              aria-label="Fler barn"
+              className="h-8 w-8 rounded-lg border border-[var(--w-line)] disabled:opacity-30"
+            >
+              +
+            </button>
+          </div>
+        )}
         <input
           name="notes"
           placeholder="Allergier eller önskemål (valfritt)"

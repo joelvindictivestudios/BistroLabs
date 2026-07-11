@@ -67,6 +67,9 @@ const demoConfig: RestaurantConfig = {
   heroImageUrl: "",
   logoUrl: "",
   address: "Storgatan 1, 111 22 Stockholm",
+  closedDates: [],
+  bookingStopDates: [],
+  sameDayCutoff: "14:00",
   voiceAgent: {
     voice: "coral",
     greeting: "",

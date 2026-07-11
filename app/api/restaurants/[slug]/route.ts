@@ -15,6 +15,19 @@ const patchSchema = z.object({
   heroImageUrl: z.union([z.url(), z.literal("")]).optional(),
   logoUrl: z.union([z.url(), z.literal("")]).optional(),
   address: z.string().max(200).optional(),
+  closedDates: z
+    .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+    .max(100)
+    .optional(),
+  bookingStopDates: z
+    .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+    .max(100)
+    .optional(),
+  sameDayCutoff: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .nullable()
+    .optional(),
   voiceAgent: z
     .object({
       voice: z.string().max(30),
@@ -88,6 +101,11 @@ export async function PATCH(
   if (body.heroImageUrl !== undefined) config.heroImageUrl = body.heroImageUrl;
   if (body.logoUrl !== undefined) config.logoUrl = body.logoUrl;
   if (body.address !== undefined) config.address = body.address;
+  if (body.closedDates !== undefined) config.closedDates = body.closedDates;
+  if (body.bookingStopDates !== undefined)
+    config.bookingStopDates = body.bookingStopDates;
+  if (body.sameDayCutoff !== undefined)
+    config.sameDayCutoff = body.sameDayCutoff;
   if (body.voiceAgent !== undefined) {
     // phoneNumber/phoneSid skrivs ENDAST av phone-number-endpointen
     config.voiceAgent = { ...config.voiceAgent, ...body.voiceAgent };

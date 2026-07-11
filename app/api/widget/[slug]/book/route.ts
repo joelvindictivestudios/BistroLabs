@@ -3,18 +3,71 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/client";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
 import { createBooking } from "@/lib/booking/availability";
+import { guestBookingBlocked } from "@/lib/booking/rules";
 import { embed } from "@/lib/ai/embeddings";
 import { setInteractionEmbedding } from "@/lib/db/vector";
 
-const bookRequestSchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  time: z.string().regex(/^\d{2}:\d{2}$/),
-  partySize: z.number().int().min(1),
-  name: z.string().min(1).max(120),
-  phone: z.string().min(5).max(30),
-  email: z.email(),
-  notes: z.string().max(500).optional(),
-});
+const bookRequestSchema = z
+  .object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    time: z.string().regex(/^\d{2}:\d{2}$/),
+    partySize: z.number().int().min(1),
+    childrenCount: z.number().int().min(0).default(0),
+    name: z.string().max(120).optional(),
+    phone: z.string().min(5).max(30).optional(),
+    email: z.email().optional(),
+    notes: z.string().max(500).optional(),
+  })
+  .refine((d) => d.email || d.phone, {
+    message: "Ange e-post eller telefonnummer",
+    path: ["email"],
+  })
+  .refine((d) => d.childrenCount <= d.partySize, {
+    message: "Antal barn kan inte överstiga sällskapets storlek",
+    path: ["childrenCount"],
+  });
+
+/** Hitta befintlig gäst på e-post eller telefon, annars skapa. */
+async function findOrCreateGuest(
+  restaurantId: string,
+  data: { name?: string; email?: string; phone?: string; notes?: string },
+) {
+  const existing = await prisma.guest.findFirst({
+    where: {
+      restaurantId,
+      OR: [
+        ...(data.email ? [{ email: data.email }] : []),
+        ...(data.phone ? [{ phone: data.phone }] : []),
+      ],
+    },
+  });
+  if (existing) {
+    // Komplettera tomma fält — skriv aldrig över befintliga uppgifter
+    await prisma.guest.update({
+      where: { id: existing.id },
+      data: {
+        ...(data.name && !existing.name ? { name: data.name } : {}),
+        ...(data.email && !existing.email ? { email: data.email } : {}),
+        ...(data.phone && !existing.phone ? { phone: data.phone } : {}),
+      },
+    });
+    return existing;
+  }
+  const guest = await prisma.guest.create({
+    data: {
+      restaurantId,
+      name: data.name || null,
+      email: data.email || null,
+      phone: data.phone || null,
+    },
+  });
+  if (data.notes?.trim()) {
+    await prisma.guestProfile.create({
+      data: { guestId: guest.id, notes: data.notes.trim() },
+    });
+  }
+  return guest;
+}
 
 // POST /api/widget/demo/book → skapar CONFIRMED-bokning direkt (widgetflödet)
 export async function POST(
@@ -25,7 +78,11 @@ export async function POST(
   const parsed = bookRequestSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Ogiltiga bokningsuppgifter", details: parsed.error.issues },
+      {
+        error:
+          parsed.error.issues[0]?.message ?? "Ogiltiga bokningsuppgifter",
+        details: parsed.error.issues,
+      },
       { status: 400 },
     );
   }
@@ -36,6 +93,12 @@ export async function POST(
     return NextResponse.json({ error: "Okänd restaurang" }, { status: 404 });
   }
   const config = parseRestaurantConfig(restaurant.config);
+
+  // Gästspärrar: bokningsstopp-datum + same-day-cutoff
+  const blockedReason = guestBookingBlocked(config, body.date);
+  if (blockedReason) {
+    return NextResponse.json({ error: blockedReason }, { status: 409 });
+  }
 
   // Stora sällskap hanteras manuellt — samma tröskel som mejl-conciergen
   if (body.partySize > config.escalationPartySize) {
@@ -48,18 +111,7 @@ export async function POST(
     );
   }
 
-  const guest = await prisma.guest.upsert({
-    where: {
-      restaurantId_email: { restaurantId: restaurant.id, email: body.email },
-    },
-    update: { name: body.name, phone: body.phone },
-    create: {
-      restaurantId: restaurant.id,
-      email: body.email,
-      name: body.name,
-      phone: body.phone,
-    },
-  });
+  const guest = await findOrCreateGuest(restaurant.id, body);
 
   const result = await createBooking(
     restaurant.id,
@@ -75,10 +127,19 @@ export async function POST(
     return NextResponse.json({ error: result.reason }, { status: 409 });
   }
 
+  if (body.childrenCount > 0) {
+    await prisma.booking.update({
+      where: { id: result.bookingId },
+      data: { childrenCount: body.childrenCount },
+    });
+  }
+
   // Guest Intelligence: widgetbokningen blir en sökbar interaktion.
   // Embedding är best-effort — bokningen ska inte falla på ett OpenAI-fel.
   const summary =
-    `Bokade via widgeten: ${body.partySize} personer ${body.date} kl ${body.time}` +
+    `Bokade via widgeten: ${body.partySize} personer` +
+    (body.childrenCount > 0 ? ` (varav ${body.childrenCount} barn)` : "") +
+    ` ${body.date} kl ${body.time}` +
     (body.notes ? `. Önskemål: ${body.notes}` : "");
   try {
     const interaction = await prisma.guestInteraction.create({
@@ -106,5 +167,6 @@ export async function POST(
     date: body.date,
     time: body.time,
     partySize: body.partySize,
+    childrenCount: body.childrenCount,
   });
 }

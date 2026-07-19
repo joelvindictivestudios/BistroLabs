@@ -1,12 +1,12 @@
 "use client";
 
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getBrowserSupabase } from "@/lib/auth/client";
 import type { RestaurantConfig } from "@/lib/email-concierge/types";
 import { BookingWidget } from "@/app/widget/[slug]/booking-widget";
+import { BrandLogo } from "@/app/components/brand-logo";
 
 // Widget-editorn: panel till vänster, den riktiga widgeten live till höger.
 // Spara = PATCH; Publicera = PATCH med published: true → kopierbar delningslänk.
@@ -34,6 +34,7 @@ type Draft = {
   offerings: Offering[];
   hours: Record<DayKey, DayHours>;
   tables: Tables;
+  widgetTheme: "classic" | "warm-light";
 };
 
 type Props = {
@@ -44,7 +45,6 @@ type Props = {
   initialTables: Tables;
   tablesLocked: boolean;
   userEmail: string;
-  previewFontClass: string;
 };
 
 function configToHours(config: RestaurantConfig): Record<DayKey, DayHours> {
@@ -64,7 +64,6 @@ export function EditorClient({
   initialTables,
   tablesLocked,
   userEmail,
-  previewFontClass,
 }: Props) {
   const router = useRouter();
   const makeDraft = (): Draft => ({
@@ -75,6 +74,7 @@ export function EditorClient({
     offerings: initialConfig.offerings.map((o) => ({ ...o })),
     hours: configToHours(initialConfig),
     tables: { ...initialTables },
+    widgetTheme: initialConfig.widgetTheme,
   });
 
   const [draft, setDraft] = useState<Draft>(makeDraft);
@@ -112,6 +112,7 @@ export function EditorClient({
           heroImageUrl: draft.heroImageUrl,
           logoUrl: draft.logoUrl,
           openingHours: draft.hours,
+          widgetTheme: draft.widgetTheme,
           offerings: draft.offerings.filter((o) => o.title.trim()),
           ...(tablesLocked ? {} : { tables: draft.tables }),
           ...(alsoPublish !== undefined ? { published: alsoPublish } : {}),
@@ -159,29 +160,11 @@ export function EditorClient({
   const labelClass = "text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]";
 
   return (
-    <div
-      className="h-dvh flex flex-col bg-[var(--w-bg)] text-[var(--w-ink)]"
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
-    >
+    <div className="h-dvh flex flex-col bg-[var(--w-bg)] text-[var(--w-ink)]">
       {/* Toppbar */}
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-[var(--w-line)] px-5">
         <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
-          <Image
-            src="/BLWhiteSide.png"
-            alt="BistroLabs"
-            width={138}
-            height={30}
-            className="h-7 w-auto"
-          />
+          <BrandLogo />
         </Link>
         <Link
           href={`/dashboard/${slug}`}
@@ -458,6 +441,38 @@ export function EditorClient({
           </section>
 
           <section>
+            <h2 className={labelClass}>Tema</h2>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {(
+                [
+                  ["classic", "Mörk (nuvarande)", "#0d0d0d", "#c89b5a"],
+                  ["warm-light", "Ljus & varm (ny)", "#f4efe8", "#c0673f"],
+                ] as const
+              ).map(([key, label, bg, accent]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => update("widgetTheme", key)}
+                  aria-pressed={draft.widgetTheme === key}
+                  className={`rounded-xl border p-3 text-left text-xs transition-colors ${
+                    draft.widgetTheme === key
+                      ? "border-[var(--w-accent)] bg-[var(--w-accent)]/10 text-[var(--w-ink)]"
+                      : "border-[var(--w-line)] text-[var(--w-muted)] hover:border-[var(--w-muted)]"
+                  }`}
+                >
+                  <span
+                    className="mb-2 flex h-8 items-center justify-center rounded-lg border border-black/20 text-[10px] font-bold"
+                    style={{ background: bg, color: accent }}
+                  >
+                    Aa
+                  </span>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section>
             <h2 className={labelClass}>Bord</h2>
             {tablesLocked ? (
               <p className="mt-3 text-xs text-[var(--w-muted)]">
@@ -495,11 +510,9 @@ export function EditorClient({
           </section>
         </aside>
 
-        {/* Live-preview: den riktiga widgeten, Fraunces-scopad som publikt */}
+        {/* Live-preview: den riktiga widgeten — temat följer draften direkt */}
         <main className="min-w-0 flex-1 bg-black/20 p-4">
-          <div
-            className={`h-full overflow-hidden rounded-2xl border border-[var(--w-line)] ${previewFontClass}`}
-          >
+          <div className="h-full overflow-hidden rounded-2xl border border-[var(--w-line)]">
             <BookingWidget
               key={preview.offerings.length > 0 ? "with-start" : "no-start"}
               embedded
@@ -512,6 +525,9 @@ export function EditorClient({
               offerings={preview.offerings}
               heroImageUrl={draft.heroImageUrl}
               logoUrl={draft.logoUrl}
+              closedDates={initialConfig.closedDates}
+              bookingStopDates={initialConfig.bookingStopDates}
+              theme={draft.widgetTheme}
             />
           </div>
         </main>

@@ -1,8 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
+import { BrandLogo } from "@/app/components/brand-logo";
 
 // Träna din AI: policyer och dokumentuppladdning → kunskapsbasen (RAG) som
 // driver widget-chatten, mejl-conciergen och telefonassistenten.
@@ -73,26 +73,10 @@ export function TrainClient({
   return (
     <div
       className="min-h-dvh bg-[var(--w-bg)] text-[var(--w-ink)]"
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
     >
       <header className="flex h-16 items-center gap-4 border-b border-[var(--w-line)] px-6">
         <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
-          <Image
-            src="/BLWhiteSide.png"
-            alt="BistroLabs"
-            width={138}
-            height={30}
-            className="h-7 w-auto"
-          />
+          <BrandLogo />
         </Link>
         <Link
           href={`/dashboard/${slug}`}

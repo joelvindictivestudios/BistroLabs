@@ -4,6 +4,9 @@ import { prisma } from "@/lib/db/client";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
 import { createBooking } from "@/lib/booking/availability";
 import { guestBookingBlocked } from "@/lib/booking/rules";
+import { findOrCreateGuest } from "@/lib/booking/guests";
+import { ALLERGY_CONSENT_TEXT } from "@/lib/booking/consent";
+import { sendEmail } from "@/lib/messaging/send";
 import { embed } from "@/lib/ai/embeddings";
 import { setInteractionEmbedding } from "@/lib/db/vector";
 
@@ -17,6 +20,9 @@ const bookRequestSchema = z
     phone: z.string().min(5).max(30).optional(),
     email: z.email().optional(),
     notes: z.string().max(500).optional(),
+    /** Hälsouppgift (GDPR art 9) — lagras i Booking.allergyNote, gallras vid COMPLETED */
+    allergies: z.string().max(300).optional(),
+    allergyConsent: z.boolean().optional(),
   })
   .refine((d) => d.email || d.phone, {
     message: "Ange e-post eller telefonnummer",
@@ -25,49 +31,12 @@ const bookRequestSchema = z
   .refine((d) => d.childrenCount <= d.partySize, {
     message: "Antal barn kan inte överstiga sällskapets storlek",
     path: ["childrenCount"],
+  })
+  .refine((d) => !d.allergies?.trim() || d.allergyConsent === true, {
+    message:
+      "Bekräfta samtycket för allergiuppgiften, eller lämna fältet tomt.",
+    path: ["allergyConsent"],
   });
-
-/** Hitta befintlig gäst på e-post eller telefon, annars skapa. */
-async function findOrCreateGuest(
-  restaurantId: string,
-  data: { name?: string; email?: string; phone?: string; notes?: string },
-) {
-  const existing = await prisma.guest.findFirst({
-    where: {
-      restaurantId,
-      OR: [
-        ...(data.email ? [{ email: data.email }] : []),
-        ...(data.phone ? [{ phone: data.phone }] : []),
-      ],
-    },
-  });
-  if (existing) {
-    // Komplettera tomma fält — skriv aldrig över befintliga uppgifter
-    await prisma.guest.update({
-      where: { id: existing.id },
-      data: {
-        ...(data.name && !existing.name ? { name: data.name } : {}),
-        ...(data.email && !existing.email ? { email: data.email } : {}),
-        ...(data.phone && !existing.phone ? { phone: data.phone } : {}),
-      },
-    });
-    return existing;
-  }
-  const guest = await prisma.guest.create({
-    data: {
-      restaurantId,
-      name: data.name || null,
-      email: data.email || null,
-      phone: data.phone || null,
-    },
-  });
-  if (data.notes?.trim()) {
-    await prisma.guestProfile.create({
-      data: { guestId: guest.id, notes: data.notes.trim() },
-    });
-  }
-  return guest;
-}
 
 // POST /api/widget/demo/book → skapar CONFIRMED-bokning direkt (widgetflödet)
 export async function POST(
@@ -111,7 +80,7 @@ export async function POST(
     );
   }
 
-  const guest = await findOrCreateGuest(restaurant.id, body);
+  const { guest } = await findOrCreateGuest(restaurant.id, body);
 
   const result = await createBooking(
     restaurant.id,
@@ -127,11 +96,46 @@ export async function POST(
     return NextResponse.json({ error: result.reason }, { status: 409 });
   }
 
-  if (body.childrenCount > 0) {
+  const allergies = body.allergies?.trim();
+  if (body.childrenCount > 0 || allergies) {
     await prisma.booking.update({
       where: { id: result.bookingId },
-      data: { childrenCount: body.childrenCount },
+      data: {
+        childrenCount: body.childrenCount,
+        ...(allergies
+          ? {
+              allergyNote: allergies,
+              allergyConsentAt: new Date(),
+              allergyConsentText: ALLERGY_CONSENT_TEXT,
+            }
+          : {}),
+      },
     });
+  }
+
+  // Bekräftelsemejl — transaktionsutskick, kräver inget marknadsföringssamtycke.
+  // Best-effort: ett mejlfel får aldrig fälla bokningen.
+  const guestEmail = body.email ?? guest.email;
+  if (guestEmail) {
+    try {
+      const sent = await sendEmail({
+        to: guestEmail,
+        subject: `Bokningsbekräftelse — ${restaurant.name}`,
+        text:
+          `Hej${body.name ? ` ${body.name}` : ""}!\n\n` +
+          `Din bokning för ${body.partySize} ${body.partySize === 1 ? "person" : "personer"} ` +
+          `den ${body.date} kl ${body.time} är bekräftad (bord ${result.tableName}).\n\n` +
+          `Välkommen!\n${restaurant.name}`,
+      });
+      if (sent.ok) {
+        await prisma.booking.update({
+          where: { id: result.bookingId },
+          data: { confirmationSentAt: new Date() },
+        });
+      }
+    } catch (e) {
+      console.error("Kunde inte skicka bokningsbekräftelse:", e);
+    }
   }
 
   // Guest Intelligence: widgetbokningen blir en sökbar interaktion.

@@ -1,15 +1,9 @@
 import { redirect } from "next/navigation";
-import { Plus_Jakarta_Sans } from "next/font/google";
 import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
+import { adminTheme } from "@/lib/theme";
 import { BookingsClient } from "./bookings-client";
-
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-display",
-  weight: ["400", "600", "700"],
-});
 
 export const metadata = { title: "Bokningar — BistroLabs" };
 
@@ -30,7 +24,7 @@ export default async function BookingsPage({
   const config = parseRestaurantConfig(restaurant.config);
 
   return (
-    <div className={jakarta.variable}>
+    <div data-theme={adminTheme(config).dataTheme}>
       <BookingsClient
         slug={slug}
         restaurantId={restaurant.id}

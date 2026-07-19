@@ -1,14 +1,7 @@
 import { redirect } from "next/navigation";
-import { Plus_Jakarta_Sans } from "next/font/google";
 import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
 import { CreateRestaurantForm } from "./create-restaurant-form";
-
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-display",
-  weight: ["400", "600", "700"],
-});
 
 export const metadata = { title: "Skapa din restaurang — BistroLabs" };
 
@@ -30,7 +23,7 @@ export default async function CreateRestaurantPage() {
   };
 
   return (
-    <div className={jakarta.variable}>
+    <div data-theme="warm">
       <CreateRestaurantForm
         userEmail={user.email ?? ""}
         defaultRestaurantName={meta.restaurant_name ?? ""}

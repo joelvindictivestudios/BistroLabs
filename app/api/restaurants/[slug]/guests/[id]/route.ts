@@ -8,6 +8,7 @@ const patchGuestSchema = z.object({
   email: z.email().nullable().optional(),
   phone: z.string().min(5).max(30).nullable().optional(),
   notes: z.string().max(1000).optional(),
+  marketingConsent: z.boolean().optional(),
 });
 
 // PATCH /api/restaurants/{slug}/guests/{id} — uppdatera kunduppgifter/notes.
@@ -75,13 +76,86 @@ export async function PATCH(
     throw e;
   }
 
-  if (body.notes !== undefined) {
+  if (body.notes !== undefined || body.marketingConsent !== undefined) {
+    // Samtycket tidsstämplas vid opt-in (19 § MFL) och nollas vid opt-out
+    const consentData =
+      body.marketingConsent === undefined
+        ? {}
+        : body.marketingConsent
+          ? { marketingConsent: true, marketingConsentAt: new Date() }
+          : { marketingConsent: false, marketingConsentAt: null };
+    const notesData =
+      body.notes === undefined ? {} : { notes: body.notes.trim() || null };
     await prisma.guestProfile.upsert({
       where: { guestId: guest.id },
-      update: { notes: body.notes.trim() || null },
-      create: { guestId: guest.id, notes: body.notes.trim() || null },
+      update: { ...notesData, ...consentData },
+      create: { guestId: guest.id, ...notesData, ...consentData },
     });
   }
 
   return NextResponse.json({ ok: true });
+}
+
+// DELETE /api/restaurants/{slug}/guests/{id} — GDPR art 17: hård radering av
+// person­uppgifterna. Bokningar är affärshistorik (beläggning) och behålls,
+// men anonymiseras genom att pekas om till en "Raderad gäst"-placeholder.
+// Mejltrådar raderas helt (innehåller gästens text).
+export async function DELETE(
+  request: NextRequest,
+  ctx: RouteContext<"/api/restaurants/[slug]/guests/[id]">,
+) {
+  const user = await getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Inte inloggad." }, { status: 401 });
+  }
+  const { slug, id } = await ctx.params;
+  const restaurant = await prisma.restaurant.findUnique({ where: { slug } });
+  if (!restaurant) {
+    return NextResponse.json({ error: "Okänd restaurang." }, { status: 404 });
+  }
+  if (restaurant.ownerId !== user.id) {
+    return NextResponse.json(
+      { error: "Du äger inte den här restaurangen." },
+      { status: 403 },
+    );
+  }
+  const guest = await prisma.guest.findFirst({
+    where: { id, restaurantId: restaurant.id },
+  });
+  if (!guest) {
+    return NextResponse.json({ error: "Okänd kund." }, { status: 404 });
+  }
+  if (guest.name === "Raderad gäst" && !guest.email && !guest.phone) {
+    return NextResponse.json(
+      { error: "Platshållaren för raderade gäster kan inte raderas." },
+      { status: 400 },
+    );
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Nullbara unika kolumner tillåter många NULL — placeholdern krockar
+    // aldrig med @@unique([restaurantId, email/phone])
+    let anon = await tx.guest.findFirst({
+      where: {
+        restaurantId: restaurant.id,
+        name: "Raderad gäst",
+        email: null,
+        phone: null,
+      },
+    });
+    anon ??= await tx.guest.create({
+      data: { restaurantId: restaurant.id, name: "Raderad gäst" },
+    });
+    // Notes/allergier på bokningarna kan innehålla personuppgifter — rensas
+    const anonymized = await tx.booking.updateMany({
+      where: { guestId: guest.id },
+      data: { guestId: anon.id, notes: null, allergyNote: null },
+    });
+    await tx.emailThread.deleteMany({ where: { guestId: guest.id } });
+    // Profil + interaktioner (inkl. embeddings) kaskadraderas via FK
+    await tx.guest.delete({ where: { id: guest.id } });
+    return anonymized.count;
+  });
+
+  return NextResponse.json({ ok: true, anonymizedBookings: result });
 }

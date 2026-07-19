@@ -23,6 +23,11 @@ type Props = {
   offerings: Offering[];
   heroImageUrl: string;
   logoUrl: string;
+  /** Röda dagar + bokningsstopp (YYYY-MM-DD) — släcks i kalendern. */
+  closedDates?: string[];
+  bookingStopDates?: string[];
+  /** Widgetens tema: "classic" (mörk, nuvarande) eller "warm-light" (GPG ljus). */
+  theme?: "classic" | "warm-light";
   /** Renderad inuti editorns preview-yta — fyll containern istället för viewporten. */
   embedded?: boolean;
 };
@@ -64,6 +69,9 @@ export function BookingWidget({
   offerings,
   heroImageUrl,
   logoUrl,
+  closedDates = [],
+  bookingStopDates = [],
+  theme = "classic",
   embedded = false,
 }: Props) {
   const hasStart = offerings.length > 0;
@@ -120,15 +128,14 @@ export function BookingWidget({
 
   return (
     <div
-      className={`${embedded ? "h-full" : "min-h-dvh bg-[#050505] lg:h-dvh lg:p-3"} text-[var(--w-ink)]`}
+      data-theme={theme === "warm-light" ? "light" : "widget-classic"}
+      className={`${embedded ? "h-full" : "min-h-dvh bg-shell lg:h-dvh lg:p-3"} text-[var(--w-ink)]`}
+      // Widgeten behåller sin serif (Fraunces) i båda temana — light-blocket
+      // delas med adminens Ljus som numera kör Jakarta
       style={
         {
-          "--w-bg": "#0d0d0d",
-          "--w-panel": "#151515",
-          "--w-line": "#282828",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#999999",
-          "--w-accent": "#c89b5a",
+          "--font-display-theme": "var(--font-fraunces), Georgia, serif",
+          "--font-display": "var(--font-fraunces), Georgia, serif",
         } as React.CSSProperties
       }
     >
@@ -252,6 +259,8 @@ export function BookingWidget({
                 monthOffset={monthOffset}
                 onMonthChange={setMonthOffset}
                 openDays={openDays}
+                closedDates={closedDates}
+                bookingStopDates={bookingStopDates}
                 selected={date}
                 onSelect={(d) => {
                   setDate(d);
@@ -302,6 +311,7 @@ export function BookingWidget({
               date={date}
               time={time}
               offeringTitle={offering?.title ?? null}
+              onEditParty={() => setStep("party")}
               onConfirmed={(c) => {
                 setConfirmation(c);
                 setStep("done");
@@ -345,7 +355,7 @@ export function BookingWidget({
 
       {/* Höger: restaurangpanel — config-driven */}
       <aside
-        className="relative hidden lg:flex flex-col justify-between overflow-hidden p-12 lg:rounded-2xl bg-cover bg-center bg-[radial-gradient(120%_90%_at_70%_10%,#1a1a1a_0%,#0d0d0d_60%)]"
+        className="relative hidden lg:flex flex-col justify-between overflow-hidden p-12 lg:rounded-2xl bg-cover bg-center bg-[radial-gradient(120%_90%_at_70%_10%,var(--bg-hover)_0%,var(--bg-app)_60%)]"
         style={
           heroImageUrl
             ? {
@@ -438,12 +448,16 @@ function Calendar({
   monthOffset,
   onMonthChange,
   openDays,
+  closedDates,
+  bookingStopDates,
   selected,
   onSelect,
 }: {
   monthOffset: number;
   onMonthChange: (n: number) => void;
   openDays: string[];
+  closedDates: string[];
+  bookingStopDates: string[];
   selected: string | null;
   onSelect: (date: string) => void;
 }) {
@@ -496,7 +510,12 @@ function Calendar({
         {Array.from({ length: daysInMonth }, (_, i) => {
           const d = new Date(first.getFullYear(), first.getMonth(), i + 1);
           const dateStr = toDateString(d);
-          const closed = !openDays.includes(WEEKDAY_KEYS[d.getDay()]);
+          // Röda dagar + bokningsstopp släcks direkt i kalendern —
+          // gästen ska inte mötas av spärren först efter datumval
+          const closed =
+            !openDays.includes(WEEKDAY_KEYS[d.getDay()]) ||
+            closedDates.includes(dateStr) ||
+            bookingStopDates.includes(dateStr);
           const past = d < today;
           const disabled = closed || past;
           return (
@@ -528,6 +547,7 @@ function DetailsForm({
   date,
   time,
   offeringTitle,
+  onEditParty,
   onConfirmed,
 }: {
   slug: string;
@@ -535,11 +555,15 @@ function DetailsForm({
   date: string;
   time: string;
   offeringTitle: string | null;
+  onEditParty: () => void;
   onConfirmed: (c: Confirmation) => void;
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [children, setChildren] = useState(0);
+  // Allergier är hälsouppgifter (GDPR art 9) — separat fält + aktivt samtycke
+  const [allergies, setAllergies] = useState("");
+  const [allergyConsent, setAllergyConsent] = useState(false);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -549,6 +573,12 @@ function DetailsForm({
     const email = String(form.get("email") ?? "").trim();
     if (!phone && !email) {
       setError("Ange e-post eller telefonnummer.");
+      return;
+    }
+    if (allergies.trim() && !allergyConsent) {
+      setError(
+        "Bekräfta samtycket för allergiuppgiften, eller lämna fältet tomt.",
+      );
       return;
     }
     setSubmitting(true);
@@ -568,10 +598,13 @@ function DetailsForm({
           notes:
             [
               offeringTitle ? `Sittning: ${offeringTitle}` : null,
-              String(form.get("notes") ?? "").trim() || null,
+              String(form.get("wishes") ?? "").trim() || null,
             ]
               .filter(Boolean)
               .join(". ") || undefined,
+          ...(allergies.trim()
+            ? { allergies: allergies.trim(), allergyConsent }
+            : {}),
         }),
       });
       const data = await res.json();
@@ -617,43 +650,93 @@ function DetailsForm({
         <p className="text-xs text-[var(--w-muted)]">
           Ange e-post eller telefonnummer så vi kan nå dig om bokningen.
         </p>
-        {party !== null && party > 1 && (
-          <div className="flex items-center gap-3 text-sm">
-            <span className="text-[var(--w-muted)]">Varav barn:</span>
-            <button
-              type="button"
-              onClick={() => setChildren(Math.max(0, children - 1))}
-              disabled={children <= 0}
-              aria-label="Färre barn"
-              className="h-8 w-8 rounded-lg border border-[var(--w-line)] disabled:opacity-30"
-            >
-              −
-            </button>
-            <span className="w-5 text-center font-mono">{children}</span>
-            <button
-              type="button"
-              onClick={() => setChildren(Math.min(party, children + 1))}
-              disabled={children >= party}
-              aria-label="Fler barn"
-              className="h-8 w-8 rounded-lg border border-[var(--w-line)] disabled:opacity-30"
-            >
-              +
-            </button>
-          </div>
-        )}
+        {/* Totalen väljs i antalssteget; här anges hur många av dem som är barn */}
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-[var(--w-muted)]">
+            Antal gäster:{" "}
+            <span className="font-mono text-[var(--w-ink)]">{party}</span>
+          </span>
+          <button
+            type="button"
+            onClick={onEditParty}
+            className="text-xs text-[var(--w-accent)] underline-offset-2 hover:underline"
+          >
+            Ändra
+          </button>
+          {party > 1 && (
+            <span className="flex items-center gap-3">
+              <span className="text-[var(--w-muted)]">— varav barn:</span>
+              <button
+                type="button"
+                onClick={() => setChildren(Math.max(0, children - 1))}
+                disabled={children <= 0}
+                aria-label="Färre barn"
+                className="h-8 w-8 rounded-lg border border-[var(--w-line)] disabled:opacity-30"
+              >
+                −
+              </button>
+              <span className="w-5 text-center font-mono">{children}</span>
+              <button
+                type="button"
+                onClick={() => setChildren(Math.min(party, children + 1))}
+                disabled={children >= party}
+                aria-label="Fler barn"
+                className="h-8 w-8 rounded-lg border border-[var(--w-line)] disabled:opacity-30"
+              >
+                +
+              </button>
+            </span>
+          )}
+        </div>
         <input
-          name="notes"
-          placeholder="Allergier eller önskemål (valfritt)"
+          name="wishes"
+          placeholder="Önskemål — bordsplacering, barnstol… (valfritt)"
           className={inputClass}
         />
+        <input
+          value={allergies}
+          onChange={(e) => {
+            setAllergies(e.target.value);
+            if (!e.target.value.trim()) setAllergyConsent(false);
+          }}
+          maxLength={300}
+          placeholder="Allergier (valfritt)"
+          className={inputClass}
+        />
+        {allergies.trim() && (
+          <label className="flex items-start gap-2.5 text-xs leading-relaxed text-[var(--w-muted)]">
+            <input
+              type="checkbox"
+              checked={allergyConsent}
+              onChange={(e) => setAllergyConsent(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--w-accent)]"
+            />
+            <span>
+              Jag godkänner att uppgiften om allergi används för att förbereda
+              besöket. Den raderas efter genomfört besök.
+            </span>
+          </label>
+        )}
         {error && <p className="text-sm text-[var(--w-accent)]">{error}</p>}
         <button
           type="submit"
           disabled={submitting}
-          className="w-full h-12 rounded-md bg-[var(--w-accent)] text-[#141210] text-sm font-medium tracking-wide hover:brightness-110 disabled:opacity-60 transition motion-safe:duration-150 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--w-accent)]"
+          className="w-full h-12 rounded-md bg-[var(--w-accent)] text-accent-on text-sm font-medium tracking-wide hover:brightness-110 disabled:opacity-60 transition motion-safe:duration-150 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--w-accent)]"
         >
           {submitting ? "Bokar…" : "Bekräfta bokningen"}
         </button>
+        <p className="text-center text-xs text-[var(--w-muted)]">
+          Genom att boka godkänner du vår{" "}
+          <a
+            href={`/widget/${slug}/integritetspolicy`}
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold text-[var(--w-accent)] hover:text-[var(--w-accent)]/80 underline-offset-2 hover:underline"
+          >
+            integritetspolicy
+          </a>
+          .
+        </p>
       </form>
     </StepShell>
   );

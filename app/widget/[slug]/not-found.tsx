@@ -1,17 +1,11 @@
 import Image from "next/image";
-import { Plus_Jakarta_Sans } from "next/font/google";
-
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-display",
-  weight: ["400", "600"],
-});
 
 // Egen 404 för widget-adresser: okänd slug eller avpublicerad restaurang.
 export default function WidgetNotFound() {
   return (
     <div
-      className={`${jakarta.variable} flex min-h-dvh flex-col items-center justify-center gap-5 bg-[#050505] px-6 text-center`}
+      data-theme="widget-classic"
+      className="flex min-h-dvh flex-col items-center justify-center gap-5 bg-[#050505] px-6 text-center"
     >
       <Image
         src="/BLWhiteSide.png"

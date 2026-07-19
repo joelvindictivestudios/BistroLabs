@@ -77,28 +77,16 @@ export function AuthForm() {
     "w-full bg-transparent border-b border-[var(--w-line)] py-2.5 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
 
   return (
-    <div
-      className="relative min-h-dvh flex items-center justify-center bg-[var(--w-bg)] text-[var(--w-ink)] px-6"
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
-    >
-      <Image
-        src="/pexels-steve-29708309.jpg"
-        alt=""
-        fill
-        priority
-        sizes="100vw"
-        className="object-cover"
+    <div className="relative min-h-dvh flex items-center justify-center overflow-hidden bg-shell text-ink px-6">
+      {/* Radial accentglöd — prototypens signatur för onboarding-skärmarna */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(70% 55% at 50% 0%, rgba(192,103,63,0.16), transparent 65%)",
+        }}
       />
-      <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(16,19,18,0.55),rgba(16,19,18,0.8))]" />
 
       <div className="relative z-10 w-full max-w-md">
         <Image
@@ -109,8 +97,11 @@ export function AuthForm() {
           priority
           className="mx-auto mb-6"
         />
-        <div className="rounded-2xl border border-[var(--w-line)]/80 bg-[rgba(16,19,18,0.72)] p-8 backdrop-blur-md">
-        <h1 className="text-3xl [font-family:var(--font-display),sans-serif] font-semibold tracking-tight">
+        <div className="rounded-modal border border-line-card bg-panel p-8 shadow-card">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-accent">
+          Personal
+        </p>
+        <h1 className="mt-1 font-display text-3xl tracking-tight">
           {mode === "signin" ? "Välkommen tillbaka" : "Skapa ditt konto"}
         </h1>
 
@@ -197,7 +188,7 @@ export function AuthForm() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full h-12 rounded-xl bg-[var(--w-accent)] text-[#141210] text-sm font-semibold tracking-wide shadow-lg shadow-black/25 hover:brightness-110 disabled:opacity-60 transition motion-safe:duration-150"
+            className="w-full h-12 rounded-xl bg-[var(--w-accent)] text-accent-on text-sm font-semibold tracking-wide shadow-accent hover:brightness-110 disabled:opacity-60 transition motion-safe:duration-150"
           >
             {submitting
               ? "Vänta…"

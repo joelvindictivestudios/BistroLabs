@@ -750,13 +750,14 @@ function TableGlyph({
           strokeWidth={selected ? 2 : 1.2}
         />
       )}
+      {/* Bordsskivan är alltid mörk (#1e1e1e) — texten hålls ljus i alla teman */}
       <text
         x={cx}
         y={cy - 3}
         textAnchor="middle"
         fontSize={11}
         fontWeight={600}
-        fill="var(--w-ink)"
+        fill="#ede7dc"
         style={{ pointerEvents: "none" }}
       >
         {table.name}
@@ -766,7 +767,7 @@ function TableGlyph({
         y={cy + 10}
         textAnchor="middle"
         fontSize={8.5}
-        fill="var(--w-muted)"
+        fill="#a89f92"
         style={{ pointerEvents: "none" }}
       >
         {seatsLabel(table)}

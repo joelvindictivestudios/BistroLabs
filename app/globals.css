@@ -1,15 +1,84 @@
 @import "tailwindcss";
+@import "./tokens.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/*
+ * Semantiska utilities mappade mot tema-variablerna (app/tokens.css).
+ * @theme inline gör att klasserna refererar var() live — samma komponent
+ * fungerar i alla teman (data-theme sätts på route-roten).
+ * Exempel: bg-card text-ink border-line-card rounded-card shadow-card
+ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* OBS: heter "shell", inte "base" — --color-base skulle kapa text-base */
+  --color-shell: var(--bg-base);
+  --color-app: var(--bg-app);
+  --color-raised: var(--bg-raised);
+  --color-card: var(--bg-card);
+  --color-panel: var(--bg-panel);
+  --color-canvas: var(--bg-canvas);
+  --color-inset: var(--bg-inset);
+  --color-hoverbg: var(--bg-hover);
+
+  --color-line: var(--border);
+  --color-line-card: var(--border-card);
+  --color-line-input: var(--border-input);
+  --color-divider: var(--divider);
+
+  --color-ink: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-muted: var(--text-muted);
+  --color-ink-faint: var(--text-faint);
+  --color-ink-hint: var(--text-hint);
+
+  --color-accent: var(--accent);
+  --color-accent-dark: var(--accent-dark);
+  --color-accent-on: var(--accent-on);
+  --color-accent-chip: var(--accent-chip-bg);
+  --color-accent-chipfg: var(--accent-chip-fg);
+
+  --color-status-pending-bg: var(--status-pending-bg);
+  --color-status-pending-fg: var(--status-pending-fg);
+  --color-status-pending-dot: var(--status-pending-dot);
+  --color-status-pending-border: var(--status-pending-border);
+  --color-status-booked-bg: var(--status-booked-bg);
+  --color-status-booked-fg: var(--status-booked-fg);
+  --color-status-booked-dot: var(--status-booked-dot);
+  --color-status-booked-border: var(--status-booked-border);
+  --color-status-seated-bg: var(--status-seated-bg);
+  --color-status-seated-fg: var(--status-seated-fg);
+  --color-status-seated-dot: var(--status-seated-dot);
+  --color-status-seated-border: var(--status-seated-border);
+  --color-status-late-bg: var(--status-late-bg);
+  --color-status-late-fg: var(--status-late-fg);
+  --color-status-late-dot: var(--status-late-dot);
+  --color-status-late-border: var(--status-late-border);
+  --color-status-grace-bg: var(--status-grace-bg);
+  --color-status-grace-fg: var(--status-grace-fg);
+  --color-status-grace-dot: var(--status-grace-dot);
+  --color-status-grace-border: var(--status-grace-border);
+  --color-status-done-bg: var(--status-done-bg);
+  --color-status-done-fg: var(--status-done-fg);
+  --color-status-done-dot: var(--status-done-dot);
+  --color-status-done-border: var(--status-done-border);
+  --color-status-free-bg: var(--status-free-bg);
+  --color-status-free-fg: var(--status-free-fg);
+  --color-status-free-dot: var(--status-free-dot);
+  --color-status-free-border: var(--status-free-border);
+
+  --font-display: var(--font-display-theme);
+  --font-ui: var(--font-ui-theme);
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-input: var(--radius-input);
+  --radius-btn: var(--radius-btn);
+  --radius-card: var(--radius-card);
+  --radius-modal: var(--radius-modal);
+  --radius-pill: var(--radius-pill);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-soft: var(--shadow-soft);
+  --shadow-modal: var(--shadow-modal);
+  --shadow-accent: var(--shadow-accent);
+  --shadow-card-light: var(--shadow-card-light);
 }
 
 @theme {
@@ -35,15 +104,6 @@
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-ui-theme, Arial, Helvetica, sans-serif);
 }

@@ -55,8 +55,22 @@ export async function GET(
     orderBy: { createdAt: "desc" },
     take: 50,
     include: {
-      profile: { select: { notes: true, visitCount: true, lastVisit: true } },
-      _count: { select: { bookings: true } },
+      profile: {
+        select: {
+          notes: true,
+          visitCount: true,
+          lastVisit: true,
+          marketingConsent: true,
+        },
+      },
+      // Avbokningar och no-shows räknas inte som bokningar i kundlistan
+      _count: {
+        select: {
+          bookings: {
+            where: { status: { notIn: ["CANCELLED", "NO_SHOW"] } },
+          },
+        },
+      },
     },
   });
 
@@ -68,6 +82,8 @@ export async function GET(
       phone: g.phone,
       notes: g.profile?.notes ?? "",
       bookingCount: g._count.bookings,
+      visitCount: g.profile?.visitCount ?? 0,
+      marketingConsent: g.profile?.marketingConsent ?? false,
       lastVisit: g.profile?.lastVisit?.toISOString() ?? null,
       createdAt: g.createdAt.toISOString(),
     })),
@@ -135,6 +151,8 @@ export async function POST(
       phone: guest.phone,
       notes: body.notes?.trim() ?? "",
       bookingCount: 0,
+      visitCount: 0,
+      marketingConsent: false,
       lastVisit: null,
       createdAt: guest.createdAt.toISOString(),
     },

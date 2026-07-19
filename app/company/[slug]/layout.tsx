@@ -1,21 +1,16 @@
 import { redirect } from "next/navigation";
-import Image from "next/image";
 import Link from "next/link";
-import { Plus_Jakarta_Sans } from "next/font/google";
 import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
+import { parseRestaurantConfig } from "@/lib/email-concierge/types";
+import { adminTheme } from "@/lib/theme";
 import { CompanySidebar } from "./company-sidebar";
-
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-display",
-  weight: ["400", "600", "700"],
-});
+import { BrandLogo } from "@/app/components/brand-logo";
 
 export const metadata = { title: "Din Restaurang — BistroLabs" };
 
 // Adminpanelens skal: toppbar + sidebar. Undersidorna (floor/hours/customers/
-// settings) renderas som children och gör sina egna datainläsningar.
+// settings/inbox) renderas som children och gör sina egna datainläsningar.
 export default async function CompanyLayout({
   children,
   params,
@@ -29,35 +24,31 @@ export default async function CompanyLayout({
   const { slug } = await params;
   const restaurant = await prisma.restaurant.findUnique({
     where: { slug },
-    select: { name: true, ownerId: true },
+    select: { id: true, name: true, ownerId: true, config: true },
   });
   if (!restaurant || restaurant.ownerId !== user.id) {
     redirect("/create-restaurant");
   }
+  const { dataTheme } = adminTheme(parseRestaurantConfig(restaurant.config));
+
+  // Sidofältets badge: antal AI-utkast som väntar på granskning
+  const pendingDrafts = await prisma.emailMessage.count({
+    where: {
+      thread: { restaurantId: restaurant.id },
+      direction: "OUTBOUND",
+      status: { in: ["DRAFT", "ESCALATED"] },
+      handledAt: null,
+    },
+  });
 
   return (
     <div
-      className={`${jakarta.variable} flex min-h-dvh flex-col bg-[var(--w-bg)] text-[var(--w-ink)]`}
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
+      data-theme={dataTheme}
+      className="flex min-h-dvh flex-col bg-app text-ink"
     >
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-[var(--w-line)] px-6">
         <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
-          <Image
-            src="/BLWhiteSide.png"
-            alt="BistroLabs"
-            width={138}
-            height={30}
-            className="h-7 w-auto"
-          />
+          <BrandLogo />
         </Link>
         <Link
           href={`/dashboard/${slug}`}
@@ -71,7 +62,7 @@ export default async function CompanyLayout({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <CompanySidebar slug={slug} />
+        <CompanySidebar slug={slug} initialPendingCount={pendingDrafts} />
         <main className="min-w-0 flex-1 overflow-y-auto px-8 py-8">
           {children}
         </main>

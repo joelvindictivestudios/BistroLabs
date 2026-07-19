@@ -6,8 +6,10 @@ import {
   parseRestaurantConfig,
   type RestaurantConfig,
 } from "@/lib/email-concierge/types";
-
-const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+import {
+  normalizeOpeningHours,
+  openingHoursPatchSchema,
+} from "@/lib/restaurant/hours";
 
 const patchSchema = z.object({
   name: z.string().min(2).max(80).optional(),
@@ -39,17 +41,10 @@ const patchSchema = z.object({
     .optional(),
   escalationPartySize: z.number().int().min(1).max(50).optional(),
   published: z.boolean().optional(),
-  openingHours: z
-    .partialRecord(
-      z.enum(WEEKDAYS),
-      z
-        .object({
-          open: z.string().regex(/^\d{2}:\d{2}$/),
-          close: z.string().regex(/^\d{2}:\d{2}$/),
-        })
-        .nullable(),
-    )
-    .optional(),
+  theme: z.enum(["classic", "warm", "light"]).optional(),
+  widgetTheme: z.enum(["classic", "warm-light"]).optional(),
+  // Flera pass per dag; gamla klienters {open,close}|null accepteras också
+  openingHours: openingHoursPatchSchema.optional(),
   offerings: z
     .array(
       z.object({
@@ -112,19 +107,14 @@ export async function PATCH(
   }
   if (body.escalationPartySize !== undefined)
     config.escalationPartySize = body.escalationPartySize;
+  if (body.theme !== undefined) config.theme = body.theme;
+  if (body.widgetTheme !== undefined) config.widgetTheme = body.widgetTheme;
   if (body.openingHours !== undefined) {
-    const openingHours: RestaurantConfig["openingHours"] = {};
-    for (const day of WEEKDAYS) {
-      const range = body.openingHours[day] ?? null;
-      if (range) openingHours[day] = [range];
+    const normalized = normalizeOpeningHours(body.openingHours);
+    if (!normalized.ok) {
+      return NextResponse.json({ error: normalized.error }, { status: 400 });
     }
-    if (Object.keys(openingHours).length === 0) {
-      return NextResponse.json(
-        { error: "Minst en dag måste ha öppettider." },
-        { status: 400 },
-      );
-    }
-    config.openingHours = openingHours;
+    config.openingHours = normalized.openingHours;
   }
   if (body.offerings !== undefined) {
     config.offerings = body.offerings.map((o, i) => ({

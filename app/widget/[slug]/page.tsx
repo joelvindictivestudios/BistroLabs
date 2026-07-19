@@ -1,14 +1,7 @@
 import { notFound } from "next/navigation";
-import { Fraunces } from "next/font/google";
 import { prisma } from "@/lib/db/client";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
 import { BookingWidget } from "./booking-widget";
-
-const fraunces = Fraunces({
-  subsets: ["latin"],
-  variable: "--font-display",
-  weight: ["400", "500", "600"],
-});
 
 const WEEKDAY_LABELS: Record<string, string> = {
   mon: "Måndag",
@@ -46,18 +39,19 @@ export default async function WidgetPage({
     }));
 
   return (
-    <div className={fraunces.variable}>
-      <BookingWidget
-        slug={slug}
-        name={restaurant.name}
-        openDays={openDays}
-        maxParty={config.escalationPartySize}
-        menu={config.menu}
-        hoursDisplay={hoursDisplay}
-        offerings={config.offerings}
-        heroImageUrl={config.heroImageUrl}
-        logoUrl={config.logoUrl}
-      />
-    </div>
+    <BookingWidget
+      slug={slug}
+      name={restaurant.name}
+      openDays={openDays}
+      maxParty={config.escalationPartySize}
+      menu={config.menu}
+      hoursDisplay={hoursDisplay}
+      offerings={config.offerings}
+      heroImageUrl={config.heroImageUrl}
+      logoUrl={config.logoUrl}
+      closedDates={config.closedDates}
+      bookingStopDates={config.bookingStopDates}
+      theme={config.widgetTheme}
+    />
   );
 }

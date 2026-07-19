@@ -9,6 +9,7 @@ import {
   isOverlapViolation,
   localToUtc,
 } from "@/lib/booking/availability";
+import { findOrCreateGuest } from "@/lib/booking/guests";
 
 const dropInSchema = z
   .object({
@@ -18,11 +19,22 @@ const dropInSchema = z
     childrenCount: z.number().int().min(0).default(0),
     tableId: z.uuid().optional(), // annars auto-tilldelning
     guestId: z.uuid().optional(), // annars placeholder-gäst
+    /** Ny gäst inline ("Ny bokning"-modalen) — dedupe:as på telefon/e-post */
+    guest: z
+      .object({
+        name: z.string().min(1).max(120),
+        phone: z.string().min(5).max(30).optional(),
+        email: z.email().optional(),
+      })
+      .optional(),
     onSite: z.boolean().default(false), // gästen står här → SEATED direkt
     notes: z.string().max(500).optional(),
   })
   .refine((d) => d.childrenCount <= d.partySize, {
     message: "Antal barn kan inte överstiga sällskapets storlek",
+  })
+  .refine((d) => !(d.guestId && d.guest), {
+    message: "Ange antingen guestId eller guest — inte båda.",
   });
 
 // POST /api/restaurants/{slug}/bookings — personalens drop-in/inringda
@@ -65,7 +77,7 @@ export async function POST(
     );
   }
 
-  // Gäst: angiven kund eller placeholder som kopplas i efterhand
+  // Gäst: angiven kund, ny gäst inline, eller placeholder som kopplas i efterhand
   let guestId = body.guestId ?? null;
   if (guestId) {
     const guest = await prisma.guest.findFirst({
@@ -73,6 +85,17 @@ export async function POST(
     });
     if (!guest) {
       return NextResponse.json({ error: "Okänd kund." }, { status: 404 });
+    }
+  } else if (body.guest) {
+    if (body.guest.phone || body.guest.email) {
+      const { guest } = await findOrCreateGuest(restaurant.id, body.guest);
+      guestId = guest.id;
+    } else {
+      // Endast namn — ingen kontaktväg att dedupe:a på, skapa namngiven gäst
+      const named = await prisma.guest.create({
+        data: { restaurantId: restaurant.id, name: body.guest.name },
+      });
+      guestId = named.id;
     }
   } else {
     const placeholder = await prisma.guest.create({

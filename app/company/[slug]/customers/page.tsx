@@ -24,8 +24,20 @@ export default async function CustomersPage({
     orderBy: { createdAt: "desc" },
     take: 50,
     include: {
-      profile: { select: { notes: true, lastVisit: true } },
-      _count: { select: { bookings: true } },
+      profile: {
+        select: {
+          notes: true,
+          lastVisit: true,
+          visitCount: true,
+          marketingConsent: true,
+        },
+      },
+      // Avbokningar och no-shows räknas inte som bokningar i kundlistan
+      _count: {
+        select: {
+          bookings: { where: { status: { notIn: ["CANCELLED", "NO_SHOW"] } } },
+        },
+      },
     },
   });
 
@@ -39,6 +51,8 @@ export default async function CustomersPage({
         phone: g.phone,
         notes: g.profile?.notes ?? "",
         bookingCount: g._count.bookings,
+        visitCount: g.profile?.visitCount ?? 0,
+        marketingConsent: g.profile?.marketingConsent ?? false,
         lastVisit: g.profile?.lastVisit?.toISOString() ?? null,
         createdAt: g.createdAt.toISOString(),
       }))}

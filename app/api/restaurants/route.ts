@@ -123,6 +123,9 @@ export async function POST(request: NextRequest) {
     closedDates: [],
     bookingStopDates: [],
     sameDayCutoff: "14:00",
+    // Nya restauranger får nya designspråket; befintliga behåller classic
+    theme: "warm",
+    widgetTheme: "warm-light",
     voiceAgent: {
       voice: "coral",
       greeting: "",

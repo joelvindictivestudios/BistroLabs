@@ -49,6 +49,10 @@ export const restaurantConfigSchema = z.object({
   bookingStopDates: z.array(z.string()).default([]),
   /** Klockslag (HH:MM) efter vilket gäster inte kan boka för samma dag. null = av. */
   sameDayCutoff: z.string().nullable().default("14:00"),
+  /** Personalvyernas tema: classic = ursprungliga mörkgrön/guld, warm = GPG-terrakotta, light = ljus. */
+  theme: z.enum(["classic", "warm", "light"]).default("classic"),
+  /** Gästwidgetens tema — oberoende av personalvyn. */
+  widgetTheme: z.enum(["classic", "warm-light"]).default("classic"),
   /** Telefonagentens inställningar (Bokningsassistenten). */
   voiceAgent: z
     .object({

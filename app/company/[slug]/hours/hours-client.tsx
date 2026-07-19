@@ -18,7 +18,9 @@ const WEEKDAYS = [
 ] as const;
 
 type DayKey = (typeof WEEKDAYS)[number]["key"];
-type DayHours = { open: string; close: string } | null;
+type TimeRange = { open: string; close: string };
+/** Flera pass per dag (lunch + middag); tom lista = stängt. */
+type DayHours = TimeRange[];
 
 type Props = {
   slug: string;
@@ -34,10 +36,7 @@ function toHours(
 ): Record<DayKey, DayHours> {
   const hours = {} as Record<DayKey, DayHours>;
   for (const { key } of WEEKDAYS) {
-    const ranges = openingHours[key] ?? [];
-    hours[key] = ranges.length
-      ? { open: ranges[0].open, close: ranges[0].close }
-      : null;
+    hours[key] = (openingHours[key] ?? []).map((r) => ({ ...r }));
   }
   return hours;
 }
@@ -45,6 +44,36 @@ function toHours(
 function toMinutes(time: string): number {
   const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
+}
+
+function fromMinutes(m: number): string {
+  const clamped = Math.min(m, 23 * 60 + 59);
+  return `${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
+}
+
+/** Klientvalidering — samma regler som API:t (open<close, ej överlapp). */
+function validateHours(
+  hours: Record<DayKey, DayHours>,
+): string | null {
+  for (const { key, short } of WEEKDAYS) {
+    const ranges = [...hours[key]].sort(
+      (a, b) => toMinutes(a.open) - toMinutes(b.open),
+    );
+    for (const r of ranges) {
+      if (toMinutes(r.open) >= toMinutes(r.close)) {
+        return `Stängningstiden måste vara efter öppningstiden (${short.toLowerCase()})`;
+      }
+    }
+    for (let i = 1; i < ranges.length; i++) {
+      if (toMinutes(ranges[i - 1].close) > toMinutes(ranges[i].open)) {
+        return `Passen överlappar varandra (${short.toLowerCase()})`;
+      }
+    }
+  }
+  if (WEEKDAYS.every(({ key }) => hours[key].length === 0)) {
+    return "Minst en dag måste ha öppettider.";
+  }
+  return null;
 }
 
 export function HoursClient({ slug, initialConfig }: Props) {
@@ -60,6 +89,12 @@ export function HoursClient({ slug, initialConfig }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
+    const validationError = validateHours(hours);
+    if (validationError) {
+      setError(validationError);
+      setSavedAt(null);
+      return;
+    }
     setSaving(true);
     setError(null);
     setSavedAt(null);
@@ -86,11 +121,17 @@ export function HoursClient({ slug, initialConfig }: Props) {
     }
   }
 
-  const openDays = WEEKDAYS.filter(({ key }) => hours[key] !== null);
-  const weeklyMinutes = openDays.reduce((sum, { key }) => {
-    const day = hours[key]!;
-    return sum + Math.max(0, toMinutes(day.close) - toMinutes(day.open));
-  }, 0);
+  const openDays = WEEKDAYS.filter(({ key }) => hours[key].length > 0);
+  const weeklyMinutes = openDays.reduce(
+    (sum, { key }) =>
+      sum +
+      hours[key].reduce(
+        (daySum, r) =>
+          daySum + Math.max(0, toMinutes(r.close) - toMinutes(r.open)),
+        0,
+      ),
+    0,
+  );
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -131,52 +172,101 @@ export function HoursClient({ slug, initialConfig }: Props) {
           </h2>
           <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)]">
             {WEEKDAYS.map(({ key, label }, i) => {
-              const day = hours[key];
+              const ranges = hours[key];
+              const open = ranges.length > 0;
+              const setRanges = (next: TimeRange[]) =>
+                setHours((h) => ({ ...h, [key]: next }));
               return (
                 <div
                   key={key}
-                  className={`flex items-center gap-4 px-4 py-3 ${
+                  className={`flex items-start gap-4 px-4 py-3 ${
                     i > 0 ? "border-t border-[var(--w-line)]/60" : ""
-                  } ${day === null ? "opacity-60" : ""}`}
+                  } ${open ? "" : "opacity-60"}`}
                 >
-                  <Switch
-                    checked={day !== null}
-                    label={`${label} ${day ? "öppet" : "stängt"}`}
-                    onChange={(on) =>
-                      setHours((h) => ({
-                        ...h,
-                        [key]: on ? { open: "17:00", close: "23:00" } : null,
-                      }))
-                    }
-                  />
-                  <span className="w-16 text-sm">{label}</span>
+                  <div className="flex h-8 items-center">
+                    <Switch
+                      checked={open}
+                      label={`${label} ${open ? "öppet" : "stängt"}`}
+                      onChange={(on) =>
+                        setRanges(on ? [{ open: "17:00", close: "23:00" }] : [])
+                      }
+                    />
+                  </div>
+                  <span className="w-16 pt-1.5 text-sm">{label}</span>
 
-                  {day ? (
-                    <>
-                      <TimeInput
-                        value={day.open}
-                        onChange={(v) =>
-                          setHours((h) => ({ ...h, [key]: { ...day, open: v } }))
-                        }
-                      />
-                      <span className="text-[var(--w-muted)]">–</span>
-                      <TimeInput
-                        value={day.close}
-                        onChange={(v) =>
-                          setHours((h) => ({
-                            ...h,
-                            [key]: { ...day, close: v },
-                          }))
-                        }
-                      />
-                      <DayTrack open={day.open} close={day.close} />
-                    </>
+                  {open ? (
+                    // Passen i en egen smal kolumn; dygnsspåret + timsumman
+                    // ligger bredvid och trängs aldrig ut av ✕-knapparna
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
+                      <div className="flex shrink-0 flex-col gap-2">
+                        {ranges.map((range, ri) => (
+                          <div key={ri} className="flex items-center gap-2">
+                            <TimeInput
+                              value={range.open}
+                              onChange={(v) =>
+                                setRanges(
+                                  ranges.map((r, idx) =>
+                                    idx === ri ? { ...r, open: v } : r,
+                                  ),
+                                )
+                              }
+                            />
+                            <span className="text-[var(--w-muted)]">–</span>
+                            <TimeInput
+                              value={range.close}
+                              onChange={(v) =>
+                                setRanges(
+                                  ranges.map((r, idx) =>
+                                    idx === ri ? { ...r, close: v } : r,
+                                  ),
+                                )
+                              }
+                            />
+                            {ranges.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRanges(
+                                    ranges.filter((_, idx) => idx !== ri),
+                                  )
+                                }
+                                aria-label={`Ta bort pass ${ri + 1} (${label})`}
+                                className="rounded px-1.5 py-0.5 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        {ranges.length < 4 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const lastClose = toMinutes(
+                                ranges[ranges.length - 1].close,
+                              );
+                              setRanges([
+                                ...ranges,
+                                {
+                                  open: fromMinutes(lastClose + 60),
+                                  close: fromMinutes(lastClose + 180),
+                                },
+                              ]);
+                            }}
+                            className="self-start rounded-lg border border-dashed border-[var(--w-line)] px-2.5 py-1 text-xs text-[var(--w-muted)] hover:border-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+                          >
+                            + Lägg till pass
+                          </button>
+                        )}
+                      </div>
+                      <DayTrack ranges={ranges} />
+                    </div>
                   ) : (
                     <>
-                      <span className="text-xs text-[var(--w-muted)]">
+                      <span className="pt-1.5 text-xs text-[var(--w-muted)]">
                         Stängt
                       </span>
-                      <DayTrack open={null} close={null} />
+                      <DayTrack ranges={[]} />
                     </>
                   )}
                 </div>
@@ -193,7 +283,7 @@ export function HoursClient({ slug, initialConfig }: Props) {
         <CalendarSection
           closedDates={closedDates}
           stopDates={stopDates}
-          weeklyClosed={WEEKDAYS.filter(({ key }) => hours[key] === null).map(
+          weeklyClosed={WEEKDAYS.filter(({ key }) => hours[key].length === 0).map(
             ({ key }) => key,
           )}
           onChange={(nextClosed, nextStops) => {
@@ -206,18 +296,17 @@ export function HoursClient({ slug, initialConfig }: Props) {
   );
 }
 
-/** Dygnsspår 00–24 med mässingsstapel för öppetintervallet — sidans signatur. */
-function DayTrack({ open, close }: { open: string | null; close: string | null }) {
-  const start = open ? (toMinutes(open) / 1440) * 100 : 0;
-  const end = close ? (toMinutes(close) / 1440) * 100 : 0;
-  const width = Math.max(0, end - start);
-  const duration =
-    open && close
-      ? Math.round(((toMinutes(close) - toMinutes(open)) / 60) * 10) / 10
-      : 0;
+/** Dygnsspår 00–24 med en mässingsstapel per pass — sidans signatur. */
+function DayTrack({ ranges }: { ranges: TimeRange[] }) {
+  const totalMinutes = ranges.reduce(
+    (sum, r) => sum + Math.max(0, toMinutes(r.close) - toMinutes(r.open)),
+    0,
+  );
+  const duration = Math.round((totalMinutes / 60) * 10) / 10;
 
   return (
-    <div className="ml-auto hidden min-w-0 flex-1 items-center gap-3 sm:flex">
+    // mt centrerar spåret mot första passraden (raderna är items-start)
+    <div className="ml-auto mt-2.5 hidden min-w-0 flex-1 items-center gap-3 sm:flex">
       <div className="relative h-1.5 min-w-24 flex-1 rounded-full bg-[var(--w-bg)]">
         {/* Diskreta dygnsmarkeringar: 06, 12, 18 */}
         {[25, 50, 75].map((pct) => (
@@ -227,12 +316,20 @@ function DayTrack({ open, close }: { open: string | null; close: string | null }
             style={{ left: `${pct}%` }}
           />
         ))}
-        {width > 0 && (
-          <span
-            className="absolute inset-y-0 rounded-full bg-[var(--w-accent)]"
-            style={{ left: `${start}%`, width: `${width}%` }}
-          />
-        )}
+        {ranges.map((r, i) => {
+          const start = (toMinutes(r.open) / 1440) * 100;
+          const width = Math.max(
+            0,
+            (toMinutes(r.close) / 1440) * 100 - start,
+          );
+          return width > 0 ? (
+            <span
+              key={i}
+              className="absolute inset-y-0 rounded-full bg-[var(--w-accent)]"
+              style={{ left: `${start}%`, width: `${width}%` }}
+            />
+          ) : null;
+        })}
       </div>
       <span className="w-10 shrink-0 text-right font-mono text-[11px] text-[var(--w-muted)]">
         {duration > 0 ? `${duration} h` : "—"}
@@ -257,13 +354,16 @@ function Switch({
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors motion-safe:duration-200 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--w-accent)] ${
+      // DESIGN-SYSTEM §5: 38×21-pill med 17 px vit knopp. left-0 är viktigt —
+      // utan den utgår absolut positionering från knappens centrerade
+      // textposition och knoppen hamnar utanför spåret.
+      className={`relative h-[21px] w-[38px] shrink-0 rounded-full transition-colors motion-safe:duration-200 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--w-accent)] ${
         checked ? "bg-[var(--w-accent)]" : "bg-[var(--w-line)]"
       }`}
     >
       <span
-        className={`absolute top-0.5 h-4 w-4 rounded-full bg-[#141210] transition-transform motion-safe:duration-200 ${
-          checked ? "translate-x-[18px]" : "translate-x-0.5"
+        className={`absolute left-0 top-0.5 h-[17px] w-[17px] rounded-full bg-white shadow-sm transition-transform motion-safe:duration-200 ${
+          checked ? "translate-x-[19px]" : "translate-x-0.5"
         }`}
       />
     </button>

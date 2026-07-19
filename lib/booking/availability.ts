@@ -57,6 +57,60 @@ function timeToMinutes(time: string): number {
   return h * 60 + m;
 }
 
+/**
+ * Röd dag- + öppettidskoll för en önskad starttid. Hela bokningen
+ * (start → start + duration, eller angivet slut) måste rymmas i ett pass.
+ * Återanvänds av checkAvailability och personalens tidsändring i PATCH.
+ */
+export function withinOpeningHours(
+  config: RestaurantConfig,
+  date: string, // "YYYY-MM-DD"
+  time: string, // "HH:MM"
+  endTime?: string, // "HH:MM" — default start + bookingDurationMinutes
+):
+  | { ok: true; startsAt: Date; endsAt: Date }
+  | { ok: false; reason: string } {
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+    !/^\d{2}:\d{2}$/.test(time) ||
+    (endTime !== undefined && !/^\d{2}:\d{2}$/.test(endTime))
+  ) {
+    return { ok: false, reason: "Ogiltigt datum- eller tidsformat" };
+  }
+
+  // Röd dag: restaurangen är stängd — gäller alla kanaler, även personal
+  if (config.closedDates.includes(date)) {
+    return { ok: false, reason: `Stängt ${date} (röd dag)` };
+  }
+
+  const weekday = WEEKDAY_KEYS[new Date(`${date}T12:00:00Z`).getUTCDay()];
+  const ranges = config.openingHours[weekday] ?? [];
+  if (ranges.length === 0) {
+    return { ok: false, reason: `Stängt på ${weekday} (${date})` };
+  }
+  const startMin = timeToMinutes(time);
+  const endMin = endTime
+    ? timeToMinutes(endTime)
+    : startMin + config.bookingDurationMinutes;
+  if (endMin <= startMin) {
+    return { ok: false, reason: "Sluttiden måste vara efter starttiden" };
+  }
+  const withinHours = ranges.some(
+    (r) => startMin >= timeToMinutes(r.open) && endMin <= timeToMinutes(r.close),
+  );
+  if (!withinHours) {
+    const hours = ranges.map((r) => `${r.open}–${r.close}`).join(", ");
+    return {
+      ok: false,
+      reason: `Utanför öppettiderna (${hours}); bokningen är ${endMin - startMin} min`,
+    };
+  }
+
+  const startsAt = localToUtc(date, time, config.timezone);
+  const endsAt = new Date(startsAt.getTime() + (endMin - startMin) * 60_000);
+  return { ok: true, startsAt, endsAt };
+}
+
 export async function checkAvailability(
   restaurantId: string,
   config: RestaurantConfig,
@@ -64,38 +118,11 @@ export async function checkAvailability(
   time: string, // "HH:MM"
   partySize: number,
 ): Promise<AvailabilityResult> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) {
-    return { available: false, reason: "Ogiltigt datum- eller tidsformat" };
+  const hours = withinOpeningHours(config, date, time);
+  if (!hours.ok) {
+    return { available: false, reason: hours.reason };
   }
-
-  // Röd dag: restaurangen är stängd — gäller alla kanaler, även personal
-  if (config.closedDates.includes(date)) {
-    return { available: false, reason: `Stängt ${date} (röd dag)` };
-  }
-
-  // Öppettider: hela bokningen (start → start + duration) måste rymmas i ett pass
-  const weekday = WEEKDAY_KEYS[new Date(`${date}T12:00:00Z`).getUTCDay()];
-  const ranges = config.openingHours[weekday] ?? [];
-  if (ranges.length === 0) {
-    return { available: false, reason: `Stängt på ${weekday} (${date})` };
-  }
-  const startMin = timeToMinutes(time);
-  const endMin = startMin + config.bookingDurationMinutes;
-  const withinHours = ranges.some(
-    (r) => startMin >= timeToMinutes(r.open) && endMin <= timeToMinutes(r.close),
-  );
-  if (!withinHours) {
-    const hours = ranges.map((r) => `${r.open}–${r.close}`).join(", ");
-    return {
-      available: false,
-      reason: `Utanför öppettiderna (${hours}); bokningen är ${config.bookingDurationMinutes} min`,
-    };
-  }
-
-  const startsAt = localToUtc(date, time, config.timezone);
-  const endsAt = new Date(
-    startsAt.getTime() + config.bookingDurationMinutes * 60_000,
-  );
+  const { startsAt, endsAt } = hours;
 
   // Greedy: minsta bord som rymmer sällskapet (och tillåter så små sällskap —
   // "endast 2"-bord har minSeats 2) och saknar överlappande bokning

@@ -65,28 +65,16 @@ export function CreateRestaurantForm({
     "w-full bg-transparent border-b border-[var(--w-line)] py-2.5 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
 
   return (
-    <div
-      className="relative min-h-dvh flex items-center justify-center bg-[var(--w-bg)] text-[var(--w-ink)] px-6"
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
-    >
-      <Image
-        src="/pexels-steve-29708309.jpg"
-        alt=""
-        fill
-        priority
-        sizes="100vw"
-        className="object-cover"
+    <div className="relative min-h-dvh flex items-center justify-center overflow-hidden bg-shell text-ink px-6">
+      {/* Radial accentglöd — prototypens signatur för onboarding-skärmarna */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(70% 55% at 50% 0%, rgba(192,103,63,0.16), transparent 65%)",
+        }}
       />
-      <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(16,19,18,0.55),rgba(16,19,18,0.8))]" />
 
       <div className="relative z-10 w-full max-w-md">
         <Image
@@ -97,11 +85,16 @@ export function CreateRestaurantForm({
           priority
           className="mx-auto mb-6"
         />
-        <div className="rounded-2xl border border-[var(--w-line)]/80 bg-[rgba(16,19,18,0.72)] p-8 backdrop-blur-md">
+        <div className="rounded-modal border border-line-card bg-panel p-8 shadow-card">
           <div className="flex items-start justify-between">
-            <h1 className="text-2xl [font-family:var(--font-display),sans-serif] font-semibold tracking-tight">
-              Skapa din restaurang
-            </h1>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-accent">
+                Kom igång
+              </p>
+              <h1 className="mt-1 font-display text-3xl tracking-tight">
+                Skapa din restaurang
+              </h1>
+            </div>
             <button
               type="button"
               onClick={async () => {
@@ -116,7 +109,8 @@ export function CreateRestaurantForm({
             </button>
           </div>
           <p className="mt-2 text-sm text-[var(--w-muted)]">
-            Bara namnet behövs — resten ställer du in i editorn.
+            Namnet räcker för att börja — bord, öppettider och widget ställer
+            du in sen.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -138,8 +132,12 @@ export function CreateRestaurantForm({
                 placeholder="webbadress (slug)"
                 className={`${inputClass} font-mono`}
               />
-              <p className="mt-1 text-xs text-[var(--w-muted)]">
-                Widgetens adress: /widget/{effectiveSlug || "…"}
+              {/* Live-förhandsvisning av widget-adressen */}
+              <p className="mt-2 rounded-lg border border-line-input bg-inset px-3 py-2 text-xs text-[var(--w-muted)]">
+                Din bokningssida:{" "}
+                <span className="font-mono text-accent">
+                  bistrolabs.se/widget/{effectiveSlug || "…"}
+                </span>
               </p>
             </div>
 
@@ -148,7 +146,7 @@ export function CreateRestaurantForm({
             <button
               type="submit"
               disabled={submitting || !name || !effectiveSlug}
-              className="w-full h-12 rounded-xl bg-[var(--w-accent)] text-[#141210] text-sm font-semibold tracking-wide shadow-lg shadow-black/25 hover:brightness-110 disabled:opacity-60 transition"
+              className="w-full h-12 rounded-xl bg-[var(--w-accent)] text-accent-on text-sm font-semibold tracking-wide shadow-accent hover:brightness-110 disabled:opacity-60 transition"
             >
               {submitting ? "Skapar…" : "Skapa & öppna editorn"}
             </button>

@@ -132,6 +132,9 @@ model GuestProfile {
   visitCount          Int       @default(0) @map("visit_count")
   avgSpend            Decimal?  @map("avg_spend") @db.Decimal(10, 2)
   lastVisit           DateTime? @map("last_visit")
+  /// Opt-in för marknadsföringsutskick (19 § MFL) — transaktionsmejl kräver det inte
+  marketingConsent    Boolean   @default(false) @map("marketing_consent")
+  marketingConsentAt  DateTime? @map("marketing_consent_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
   guest               Guest     @relation(fields: [guestId], references: [id], onDelete: Cascade)
 
@@ -180,7 +183,18 @@ model Booking {
   status       BookingStatus @default(PENDING)
   /// När gästen checkades in (status → SEATED) — driver "Sitter · X min"-timern
   seatedAt     DateTime?     @map("seated_at")
+  /// Antal som faktiskt kom — default partySize vid incheckning, kan justeras
+  arrivedCount Int?          @map("arrived_count")
   notes        String?
+  /// Personalens interna anteckning — syns aldrig för gästen
+  staffNote    String?       @map("staff_note")
+  /// Allergiuppgift från widgeten (GDPR art 9) — GALLRAS (nullas) vid COMPLETED
+  allergyNote  String?       @map("allergy_note")
+  /// Samtyckeslogg: tidpunkt + exakt formulering gästen godkände (behålls efter gallring)
+  allergyConsentAt   DateTime? @map("allergy_consent_at")
+  allergyConsentText String?   @map("allergy_consent_text")
+  confirmationSentAt DateTime? @map("confirmation_sent_at")
+  reminderSentAt     DateTime? @map("reminder_sent_at")
   createdBy    String        @default("concierge") @map("created_by") // "concierge" | "human"
   createdAt    DateTime      @default(now()) @map("created_at")
   restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -217,6 +231,8 @@ model EmailMessage {
   confidence       Float?
   escalated        Boolean          @default(false)
   escalationReason String?          @map("escalation_reason")
+  /// "Jag tar den själv" — personal har tagit över tråden; räknas inte som väntande
+  handledAt        DateTime?        @map("handled_at")
   createdAt        DateTime         @default(now()) @map("created_at")
   thread           EmailThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
 

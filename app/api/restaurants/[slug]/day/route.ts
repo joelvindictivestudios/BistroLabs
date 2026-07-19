@@ -79,6 +79,9 @@ export async function GET(
       createdAt: b.createdAt.toISOString(),
       createdBy: b.createdBy,
       notes: b.notes,
+      arrivedCount: b.arrivedCount,
+      staffNote: b.staffNote,
+      allergyNote: b.allergyNote,
       guestName: b.guest.name ?? b.guest.email ?? b.guest.phone ?? "Gäst",
     })),
   });

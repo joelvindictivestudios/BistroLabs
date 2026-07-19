@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Search01Icon, UserAdd01Icon } from "@hugeicons/core-free-icons";
 
-// Kundregistret: sök, skapa och redigera kunder. Regel: e-post ELLER telefon
-// krävs, namn valfritt, plus fritext för allergier/övriga upplysningar.
+// Kundregistret: sök, skapa, redigera, importera (CSV) och radera kunder.
+// Regel: e-post ELLER telefon krävs, namn valfritt, plus fritext för
+// allergier/övriga upplysningar. Radering är hård (GDPR art 17).
 
 export type CustomerRow = {
   id: string;
@@ -14,8 +15,17 @@ export type CustomerRow = {
   phone: string | null;
   notes: string;
   bookingCount: number;
+  visitCount: number;
+  marketingConsent: boolean;
   lastVisit: string | null;
   createdAt: string;
+};
+
+type ImportSummary = {
+  created: number;
+  merged: number;
+  skipped: number;
+  errors: { row: number; message: string }[];
 };
 
 type Props = { slug: string; initialGuests: CustomerRow[] };
@@ -27,6 +37,35 @@ export function CustomersClient({ slug, initialGuests }: Props) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<CustomerRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function importCsv(file: File) {
+    setImporting(true);
+    setError(null);
+    setImportSummary(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/restaurants/${slug}/guests/import`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Importen misslyckades.");
+        return;
+      }
+      setImportSummary(data);
+      await search(query);
+    } catch {
+      setError("Importen misslyckades.");
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   async function search(q: string) {
     setSearching(true);
@@ -59,19 +98,66 @@ export function CustomersClient({ slug, initialGuests }: Props) {
             Alla gäster som bokat via widget, telefon eller lagts in manuellt.
           </p>
         </div>
-        <button
-          onClick={() => {
-            setShowForm((v) => !v);
-            setEditing(null);
-          }}
-          className="flex h-10 items-center gap-2 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] shadow-lg shadow-black/25 hover:brightness-110 transition"
-        >
-          <HugeiconsIcon icon={UserAdd01Icon} size={18} strokeWidth={1.8} />
-          Ny kund
-        </button>
+        <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importCsv(file);
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            title="CSV med kolumnerna namn, e-post, telefon, anteckning"
+            className="h-10 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:border-[var(--w-accent)] hover:text-[var(--w-ink)] disabled:opacity-50 transition"
+          >
+            {importing ? "Importerar…" : "Importera CSV"}
+          </button>
+          <button
+            onClick={() => {
+              setShowForm((v) => !v);
+              setEditing(null);
+            }}
+            className="flex h-10 items-center gap-2 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on shadow-lg shadow-black/25 hover:brightness-110 transition"
+          >
+            <HugeiconsIcon icon={UserAdd01Icon} size={18} strokeWidth={1.8} />
+            Ny kund
+          </button>
+        </div>
       </div>
 
       {error && <p className="text-xs text-yellow-400">{error}</p>}
+
+      {importSummary && (
+        <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-4 py-3 text-sm">
+          <div>
+            <p>
+              {importSummary.created} importerade · {importSummary.merged}{" "}
+              sammanslagna · {importSummary.skipped} hoppades över
+            </p>
+            {importSummary.errors.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-xs text-[var(--w-muted)]">
+                {importSummary.errors.map((e) => (
+                  <li key={e.row}>
+                    Rad {e.row}: {e.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button
+            onClick={() => setImportSummary(null)}
+            aria-label="Stäng"
+            className="text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)]"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {(showForm || editing) && (
         <CustomerForm
@@ -85,6 +171,11 @@ export function CustomersClient({ slug, initialGuests }: Props) {
             } else {
               setGuests((gs) => [saved, ...gs]);
             }
+            setShowForm(false);
+            setEditing(null);
+          }}
+          onDeleted={(id) => {
+            setGuests((gs) => gs.filter((g) => g.id !== id));
             setShowForm(false);
             setEditing(null);
           }}
@@ -178,18 +269,24 @@ export function CustomerForm({
   slug,
   existing,
   onDone,
+  onDeleted,
   onCancel,
 }: {
   slug: string;
   existing: CustomerRow | null;
   onDone: (guest: CustomerRow) => void;
+  onDeleted?: (guestId: string) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(existing?.name ?? "");
   const [email, setEmail] = useState(existing?.email ?? "");
   const [phone, setPhone] = useState(existing?.phone ?? "");
   const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [marketingConsent, setMarketingConsent] = useState(
+    existing?.marketingConsent ?? false,
+  );
   const [saving, setSaving] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
@@ -215,6 +312,7 @@ export function CustomerForm({
               email: email.trim() || null,
               phone: phone.trim() || null,
               notes: notes.trim(),
+              marketingConsent,
             }),
           })
         : await fetch(`/api/restaurants/${slug}/guests`, {
@@ -235,9 +333,32 @@ export function CustomerForm({
               email: email.trim() || null,
               phone: phone.trim() || null,
               notes: notes.trim(),
+              marketingConsent,
             }
           : data,
       );
+    } catch {
+      setError("Något gick fel — prova igen.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteCustomer() {
+    if (!existing) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/restaurants/${slug}/guests/${existing.id}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "Kunde inte radera kunden.");
+        return;
+      }
+      onDeleted?.(existing.id);
     } catch {
       setError("Något gick fel — prova igen.");
     } finally {
@@ -281,24 +402,70 @@ export function CustomerForm({
         placeholder="Övriga upplysningar / allergier (valfritt)"
         className={`${inputClass} mt-4 resize-none rounded-lg border bg-[var(--w-bg)] px-3 py-2`}
       />
+      {existing && (
+        <label className="mt-4 flex items-center gap-2.5 text-sm">
+          <input
+            type="checkbox"
+            checked={marketingConsent}
+            onChange={(e) => setMarketingConsent(e.target.checked)}
+            className="h-4 w-4 accent-[var(--w-accent)]"
+          />
+          <span>
+            Samtycker till utskick{" "}
+            <span className="text-xs text-[var(--w-muted)]">
+              — erbjudanden via e-post/SMS (krävs inte för bekräftelser)
+            </span>
+          </span>
+        </label>
+      )}
       <p className="mt-2 text-xs text-[var(--w-muted)]">
         E-post eller telefonnummer krävs.
       </p>
       {error && <p className="mt-2 text-xs text-yellow-400">{error}</p>}
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          onClick={onCancel}
-          className="h-9 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
-        >
-          Avbryt
-        </button>
-        <button
-          onClick={() => void save()}
-          disabled={saving}
-          className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] hover:brightness-110 disabled:opacity-60 transition"
-        >
-          {saving ? "Sparar…" : existing ? "Spara ändringar" : "Skapa kund"}
-        </button>
+      <div className="mt-4 flex items-center gap-2">
+        {existing &&
+          (deleteArmed ? (
+            <span className="flex items-center gap-2 rounded-xl border border-status-late-border bg-status-late-bg px-3 py-1.5">
+              <span className="text-xs font-medium text-status-late-fg">
+                Raderar alla uppgifter permanent.
+              </span>
+              <button
+                onClick={() => void deleteCustomer()}
+                disabled={saving}
+                className="rounded-lg bg-[#b5503f] px-3 py-1.5 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60 transition"
+              >
+                Ja, radera
+              </button>
+              <button
+                onClick={() => setDeleteArmed(false)}
+                className="rounded-lg border border-[var(--w-line)] px-3 py-1.5 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+              >
+                Ångra
+              </button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setDeleteArmed(true)}
+              className="h-9 rounded-xl border border-[#5c3a30] px-4 text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
+            >
+              Radera kund…
+            </button>
+          ))}
+        <span className="ml-auto flex gap-2">
+          <button
+            onClick={onCancel}
+            className="h-9 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+          >
+            Avbryt
+          </button>
+          <button
+            onClick={() => void save()}
+            disabled={saving}
+            className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
+          >
+            {saving ? "Sparar…" : existing ? "Spara ändringar" : "Skapa kund"}
+          </button>
+        </span>
       </div>
     </div>
   );

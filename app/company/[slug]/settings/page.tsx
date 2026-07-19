@@ -28,6 +28,7 @@ export default async function SettingsPage({
       initialAddress={config.address}
       initialSameDayCutoff={config.sameDayCutoff}
       initialEscalationPartySize={config.escalationPartySize}
+      initialTheme={config.theme}
     />
   );
 }

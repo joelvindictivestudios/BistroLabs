@@ -4,7 +4,22 @@ import {
   setKnowledgeEmbedding,
   setInteractionEmbedding,
 } from "../lib/db/vector";
+import { localToUtc } from "../lib/booking/availability";
+import { ALLERGY_CONSENT_TEXT } from "../lib/booking/consent";
 import type { RestaurantConfig } from "../lib/email-concierge/types";
+
+/** Nästa datum (YYYY-MM-DD, Europe/Stockholm) vars veckodag finns i `days` (0=sön). */
+function nextDateFor(days: number[], skipToday = false): string {
+  const fmt = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Stockholm" });
+  for (let offset = skipToday ? 1 : 0; offset < 14; offset++) {
+    const d = new Date(Date.now() + offset * 24 * 3600_000);
+    const dateStr = fmt.format(d);
+    if (days.includes(new Date(`${dateStr}T12:00:00Z`).getUTCDay())) {
+      return dateStr;
+    }
+  }
+  throw new Error("Hittade ingen öppen dag inom 14 dagar");
+}
 
 const DEMO_SLUG = "demo";
 
@@ -70,6 +85,8 @@ const demoConfig: RestaurantConfig = {
   closedDates: [],
   bookingStopDates: [],
   sameDayCutoff: "14:00",
+  theme: "warm",
+  widgetTheme: "warm-light",
   voiceAgent: {
     voice: "coral",
     greeting: "",
@@ -215,6 +232,202 @@ async function main() {
   const [interactionEmbedding] = await embedMany([pastSummary]);
   await setInteractionEmbedding(guest.interactions[0].id, interactionEmbedding);
   console.log(`Gäst "${guest.name}" med profil + embeddad interaktion skapad`);
+
+  // --- Demo-bokningar (ÖVERLÄMNING §2): Bekräfta-flödet, allergi-gallring,
+  // personalanteckning och besöksstatistik ska gå att klicka igenom direkt ---
+  const tables = await prisma.diningTable.findMany({
+    where: { restaurantId: restaurant.id },
+  });
+  const tableId = (name: string) => tables.find((t) => t.name === name)!.id;
+  const tz = "Europe/Stockholm";
+  const tonight = nextDateFor([2, 3, 4, 5, 6]); // nästa öppna dag (tis–lör)
+  const nextFriday = nextDateFor([5], true);
+  const lastWeek = new Intl.DateTimeFormat("sv-SE", { timeZone: tz }).format(
+    new Date(Date.now() - 7 * 24 * 3600_000),
+  );
+
+  // Karin Åberg — AI-mejlbokning som väntar på bekräftelse ("Väntar"-badge)
+  const karin = await prisma.guest.create({
+    data: {
+      restaurantId: restaurant.id,
+      email: "karin.aberg@example.com",
+      phone: "+46702345678",
+      name: "Karin Åberg",
+      profile: { create: {} },
+    },
+  });
+  const karinBooking = await prisma.booking.create({
+    data: {
+      restaurantId: restaurant.id,
+      guestId: karin.id,
+      tableId: tableId("T4"),
+      startsAt: localToUtc(nextFriday, "19:00", tz),
+      endsAt: localToUtc(nextFriday, "21:00", tz),
+      partySize: 4,
+      status: "PENDING",
+      createdBy: "concierge",
+    },
+  });
+
+  const erik = await prisma.guest.create({
+    data: {
+      restaurantId: restaurant.id,
+      phone: "+46703456789",
+      name: "Erik Lund",
+      profile: { create: {} },
+    },
+  });
+  const maria = await prisma.guest.create({
+    data: {
+      restaurantId: restaurant.id,
+      email: "maria.berg@example.com",
+      name: "Maria Berg",
+      profile: { create: { visitCount: 1, lastVisit: localToUtc(lastWeek, "18:00", tz) } },
+    },
+  });
+  await prisma.booking.createMany({
+    data: [
+      // Ikväll: Anna med allergiuppgift (gallras när besöket sätts som Klar)
+      {
+        restaurantId: restaurant.id,
+        guestId: guest.id,
+        tableId: tableId("T5"),
+        startsAt: localToUtc(tonight, "18:00", tz),
+        endsAt: localToUtc(tonight, "20:00", tz),
+        partySize: 2,
+        status: "CONFIRMED",
+        notes: "Sittning: Middag",
+        allergyNote: "Vegetarian, nötallergi",
+        allergyConsentAt: new Date(),
+        allergyConsentText: ALLERGY_CONSENT_TEXT,
+        createdBy: "widget",
+      },
+      // Ikväll: personalanteckning i bokningsmodalen
+      {
+        restaurantId: restaurant.id,
+        guestId: erik.id,
+        tableId: tableId("T6"),
+        startsAt: localToUtc(tonight, "19:30", tz),
+        endsAt: localToUtc(tonight, "21:30", tz),
+        partySize: 5,
+        status: "CONFIRMED",
+        staffNote: "Stammis — vill sitta nära köket",
+        createdBy: "dropin",
+      },
+      // Förra veckan: genomförd med incheckat antal (statistik + kundlistan)
+      {
+        restaurantId: restaurant.id,
+        guestId: maria.id,
+        tableId: tableId("T2"),
+        startsAt: localToUtc(lastWeek, "18:00", tz),
+        endsAt: localToUtc(lastWeek, "20:00", tz),
+        partySize: 2,
+        arrivedCount: 2,
+        status: "COMPLETED",
+        createdBy: "widget",
+      },
+    ],
+  });
+  console.log(
+    `Bokningar: Karin Åberg PENDING (${nextFriday} 19:00, AI-mejl) + 2 ikväll (${tonight}) + 1 genomförd`,
+  );
+
+  // --- AI-inkorgen: 2 utkast (varav Karins hör ihop med PENDING-bokningen)
+  // + 1 skickat svar. Inget skickas utan godkännande i inkorgen. ---
+  await prisma.emailThread.create({
+    data: {
+      restaurantId: restaurant.id,
+      guestId: karin.id,
+      subject: "Bord för 4 på fredag?",
+      messages: {
+        create: [
+          {
+            direction: "INBOUND",
+            status: "RECEIVED",
+            fromAddress: "karin.aberg@example.com",
+            body:
+              "Hej!\n\nVi är fyra kollegor som gärna vill äta middag hos er nu på fredag " +
+              "runt kl 19. Har ni plats? Gärna ett lugnt bord om det går.\n\nHälsningar,\nKarin Åberg",
+            intent: "BOOKING_REQUEST",
+          },
+          {
+            direction: "OUTBOUND",
+            status: "DRAFT",
+            fromAddress: `concierge@${DEMO_SLUG}.example`,
+            body:
+              "Hej Karin!\n\nVad roligt att ni vill besöka oss. Fredag kl 19:00 har vi plats " +
+              "för 4 personer — jag har reserverat bord T4, ett lugnt bord i matsalen. " +
+              "Bokningen väntar på vår bekräftelse och ni får ett besked strax.\n\n" +
+              "Varma hälsningar, Demo Bistro",
+            intent: "BOOKING_REQUEST",
+            confidence: 0.92,
+          },
+        ],
+      },
+    },
+  });
+  await prisma.emailThread.create({
+    data: {
+      restaurantId: restaurant.id,
+      subject: "Går det att ordna glutenfritt till lördag?",
+      messages: {
+        create: [
+          {
+            direction: "INBOUND",
+            status: "RECEIVED",
+            fromAddress: "johan.ek@example.com",
+            body:
+              "Hej! Vi funderar på att boka bord för 2 på lördag. Min sambo är glutenintolerant " +
+              "— hur brukar ni lösa det? /Johan",
+            intent: "QUESTION",
+          },
+          {
+            direction: "OUTBOUND",
+            status: "DRAFT",
+            fromAddress: `concierge@${DEMO_SLUG}.example`,
+            body:
+              "Hej Johan!\n\nAbsolut — köket hanterar glutenfritt dagligen och flera av rätterna " +
+              "på menyn kan anpassas. Säg bara till vid bokningen så förbereder vi. " +
+              "Vill ni att jag reserverar ett bord för 2 på lördag?\n\nVarma hälsningar, Demo Bistro",
+            intent: "QUESTION",
+            confidence: 0.84,
+          },
+        ],
+      },
+    },
+  });
+  await prisma.emailThread.create({
+    data: {
+      restaurantId: restaurant.id,
+      guestId: guest.id,
+      subject: "Tack för senast!",
+      messages: {
+        create: [
+          {
+            direction: "INBOUND",
+            status: "RECEIVED",
+            fromAddress: "anna.andersson@example.com",
+            body:
+              "Hej! Ville bara säga tack för en underbar kväll i fredags — hälsa köket! /Anna",
+            intent: "OTHER",
+          },
+          {
+            direction: "OUTBOUND",
+            status: "SENT",
+            fromAddress: `concierge@${DEMO_SLUG}.example`,
+            body:
+              "Hej Anna!\n\nTack snälla för de fina orden — det värmer! Vi hälsar köket. " +
+              "Varmt välkomna åter.\n\nVarma hälsningar, Demo Bistro",
+            intent: "OTHER",
+            confidence: 0.97,
+          },
+        ],
+      },
+    },
+  });
+  console.log(
+    `AI-inkorg: 2 utkast + 1 skickat (Karins utkast hör till bokning ${karinBooking.id.slice(0, 8)})`,
+  );
 
   console.log("Seed klar ✓");
 }

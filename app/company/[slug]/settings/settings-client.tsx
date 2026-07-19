@@ -1,8 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
-// Inställningar: grunduppgifter + bokningsregler för gästkanalerna.
+// Inställningar: utseende (tema), grunduppgifter + bokningsregler för
+// gästkanalerna. Temaklick förhandsvisas direkt (data-theme sätts på
+// layoutens rot i DOM) men gäller först efter Spara — lämnar man sidan
+// osparad återställs det sparade temat.
+
+type Theme = "classic" | "warm" | "light";
+
+const THEMES: {
+  key: Theme;
+  label: string;
+  description: string;
+  swatch: { bg: string; panel: string; accent: string };
+}[] = [
+  {
+    key: "classic",
+    label: "Mörk",
+    description: "Ursprungliga mörkgröna looken med mässing",
+    swatch: { bg: "#101312", panel: "#161b19", accent: "#c89b5a" },
+  },
+  {
+    key: "warm",
+    label: "Varm",
+    description: "Nya värdshuskänslan — varm mörk med terrakotta",
+    swatch: { bg: "#1b1713", panel: "#262019", accent: "#c0673f" },
+  },
+  {
+    key: "light",
+    label: "Ljus",
+    description: "Ljus och varm — för dagsljusa miljöer",
+    swatch: { bg: "#f7f3ee", panel: "#ffffff", accent: "#c0673f" },
+  },
+];
 
 type Props = {
   slug: string;
@@ -10,6 +42,7 @@ type Props = {
   initialAddress: string;
   initialSameDayCutoff: string | null;
   initialEscalationPartySize: number;
+  initialTheme: Theme;
 };
 
 export function SettingsClient({
@@ -18,7 +51,9 @@ export function SettingsClient({
   initialAddress,
   initialSameDayCutoff,
   initialEscalationPartySize,
+  initialTheme,
 }: Props) {
+  const router = useRouter();
   const [name, setName] = useState(initialName);
   const [address, setAddress] = useState(initialAddress);
   const [cutoffEnabled, setCutoffEnabled] = useState(
@@ -26,9 +61,32 @@ export function SettingsClient({
   );
   const [cutoff, setCutoff] = useState(initialSameDayCutoff ?? "14:00");
   const [maxParty, setMaxParty] = useState(initialEscalationPartySize);
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [savedTheme, setSavedTheme] = useState<Theme>(initialTheme);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Layoutens rot bär data-theme (serverrenderat). Förhandsvisningen skriver
+  // attributet direkt; senast SPARADE temat återställs vid unmount.
+  const savedThemeRef = useRef(initialTheme);
+  useEffect(() => {
+    savedThemeRef.current = savedTheme;
+  }, [savedTheme]);
+
+  const themeRoot = () =>
+    document.querySelector<HTMLElement>("[data-theme]");
+
+  function previewTheme(t: Theme) {
+    setTheme(t);
+    themeRoot()?.setAttribute("data-theme", t);
+  }
+
+  useEffect(() => {
+    return () => {
+      themeRoot()?.setAttribute("data-theme", savedThemeRef.current);
+    };
+  }, []);
 
   async function save() {
     setSaving(true);
@@ -43,6 +101,7 @@ export function SettingsClient({
           address,
           sameDayCutoff: cutoffEnabled ? cutoff : null,
           escalationPartySize: maxParty,
+          theme,
         }),
       });
       if (!res.ok) {
@@ -51,6 +110,10 @@ export function SettingsClient({
         return;
       }
       setSavedAt(Date.now());
+      if (theme !== savedTheme) {
+        setSavedTheme(theme);
+        router.refresh();
+      }
     } catch {
       setError("Något gick fel — prova igen.");
     } finally {
@@ -88,6 +151,53 @@ export function SettingsClient({
           </button>
         </div>
       </div>
+
+      <section>
+        <h2 className={labelClass}>Utseende</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {THEMES.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => previewTheme(t.key)}
+              aria-pressed={theme === t.key}
+              className={`rounded-2xl border p-4 text-left transition-colors ${
+                theme === t.key
+                  ? "border-[var(--w-accent)] bg-[var(--w-accent)]/10"
+                  : "border-[var(--w-line)] hover:border-[var(--w-muted)]"
+              }`}
+            >
+              <span
+                className="flex h-10 items-center gap-1.5 rounded-lg border border-black/20 px-2"
+                style={{ background: t.swatch.bg }}
+              >
+                <span
+                  className="h-6 w-8 rounded"
+                  style={{ background: t.swatch.panel }}
+                />
+                <span
+                  className="h-6 w-3 rounded"
+                  style={{ background: t.swatch.accent }}
+                />
+              </span>
+              <span className="mt-2.5 block text-sm font-semibold">
+                {t.label}
+              </span>
+              <span className="mt-0.5 block text-xs text-[var(--w-muted)]">
+                {t.description}
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-[var(--w-muted)]">
+          Gäller personalvyerna. Gästwidgetens tema väljs i widget-editorn.
+          {theme !== savedTheme && (
+            <span className="ml-1 font-semibold text-[var(--w-accent)]">
+              Förhandsvisning — spara för att behålla.
+            </span>
+          )}
+        </p>
+      </section>
 
       <section>
         <h2 className={labelClass}>Grunduppgifter</h2>

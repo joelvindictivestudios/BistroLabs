@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import type { RestaurantConfig } from "@/lib/email-concierge/types";
 import type { CoreFactsStatus } from "@/lib/restaurant/core-facts";
+import { BrandLogo } from "@/app/components/brand-logo";
 
 // Bokningsassistenten (telefon): röstval, samtalsinställningar och ett eget
 // Twilio-nummer. Gated bakom grundinfo i Träna din AI — assistenten ska inte
@@ -103,26 +103,10 @@ export function AssistantClient({
   return (
     <div
       className="min-h-dvh bg-[var(--w-bg)] text-[var(--w-ink)]"
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
     >
       <header className="flex h-16 items-center gap-4 border-b border-[var(--w-line)] px-6">
         <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
-          <Image
-            src="/BLWhiteSide.png"
-            alt="BistroLabs"
-            width={138}
-            height={30}
-            className="h-7 w-auto"
-          />
+          <BrandLogo />
         </Link>
         <Link
           href={`/dashboard/${slug}`}

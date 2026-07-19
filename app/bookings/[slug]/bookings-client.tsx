@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { getBrowserSupabase } from "@/lib/auth/client";
+import { Avatar } from "@/app/components/avatar";
+import { BrandLogo } from "@/app/components/brand-logo";
 import {
   GRID_W,
   GRID_H,
@@ -22,6 +23,13 @@ import {
 
 const GRACE_MINUTES = 15;
 const OCCUPYING = new Set(["PENDING", "CONFIRMED", "SEATED"]);
+
+const SOURCE_LABELS: Record<string, string> = {
+  widget: "Widget",
+  concierge: "AI-mejl",
+  dropin: "Drop-in",
+  human: "Manuell",
+};
 
 type Room = { id: string; name: string };
 type TableRow = {
@@ -47,6 +55,9 @@ type Booking = {
   createdAt: string;
   createdBy: string;
   notes: string | null;
+  arrivedCount: number | null;
+  staffNote: string | null;
+  allergyNote: string | null;
   guestName: string;
 };
 type DayData = {
@@ -70,27 +81,30 @@ const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 const STATUS_META: Record<string, { label: string; classes: string }> = {
   PENDING: {
     label: "Väntar",
-    classes: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
+    classes:
+      "border-status-pending-border bg-status-pending-bg text-status-pending-fg",
   },
   CONFIRMED: {
     label: "Bekräftad",
-    classes: "border-[var(--w-accent)]/50 bg-[var(--w-accent)]/10 text-[var(--w-accent)]",
+    classes:
+      "border-status-booked-border bg-status-booked-bg text-status-booked-fg",
   },
   SEATED: {
     label: "Sitter",
-    classes: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400",
+    classes:
+      "border-status-seated-border bg-status-seated-bg text-status-seated-fg",
   },
   COMPLETED: {
     label: "Genomförd",
-    classes: "border-[var(--w-line)] bg-[var(--w-panel)] text-[var(--w-muted)]",
+    classes: "border-status-done-border bg-status-done-bg text-status-done-fg",
   },
   CANCELLED: {
     label: "Avbokad",
-    classes: "border-[var(--w-line)] bg-[var(--w-panel)] text-[var(--w-muted)]",
+    classes: "border-status-done-border bg-status-done-bg text-status-done-fg",
   },
   NO_SHOW: {
     label: "Utebliven",
-    classes: "border-red-500/40 bg-red-500/10 text-red-400",
+    classes: "border-status-late-border bg-status-late-bg text-status-late-fg",
   },
 };
 
@@ -256,7 +270,16 @@ export function BookingsClient({
   const patchBooking = useCallback(
     async (
       id: string,
-      body: { tableId?: string; status?: string; guestId?: string },
+      body: {
+        tableId?: string;
+        status?: string;
+        guestId?: string;
+        arrivedCount?: number;
+        staffNote?: string | null;
+        date?: string;
+        time?: string;
+        endTime?: string;
+      },
     ) => {
       setError(null);
       const res = await fetch(`/api/restaurants/${slug}/bookings/${id}`, {
@@ -290,6 +313,9 @@ export function BookingsClient({
   const modalBooking =
     data?.bookings.find((b) => b.id === modalBookingId) ?? null;
   const [dropInOpen, setDropInOpen] = useState(false);
+  const [newBookingOpen, setNewBookingOpen] = useState(false);
+  // Tvåstegs-avboka: kortet vars avbokning väntar på "Ja, avboka"/"Ångra"
+  const [cancelArmedId, setCancelArmedId] = useState<string | null>(null);
   const [attachBookingId, setAttachBookingId] = useState<string | null>(null);
   const [listDrag, setListDrag] = useState<{
     bookingId: string;
@@ -395,9 +421,9 @@ export function BookingsClient({
       }
       return;
     }
-    // Rent klick: öppna gästmodalen för incheckade bord
+    // Rent klick: öppna bokningsmodalen
     const booking = data?.bookings.find((b) => b.id === bookingId);
-    if (booking?.status === "SEATED") {
+    if (booking && OCCUPYING.has(booking.status)) {
       setModalBookingId(bookingId);
     }
   }
@@ -490,28 +516,10 @@ export function BookingsClient({
     });
 
   return (
-    <div
-      className="min-h-dvh bg-[var(--w-bg)] text-[var(--w-ink)]"
-      style={
-        {
-          "--w-bg": "#101312",
-          "--w-panel": "#161b19",
-          "--w-line": "#2a312d",
-          "--w-ink": "#ede7dc",
-          "--w-muted": "#8b9389",
-          "--w-accent": "#c89b5a",
-        } as React.CSSProperties
-      }
-    >
+    <div className="min-h-dvh bg-[var(--w-bg)] text-[var(--w-ink)]">
       <header className="flex h-16 items-center gap-4 border-b border-[var(--w-line)] px-6">
         <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
-          <Image
-            src="/BLWhiteSide.png"
-            alt="BistroLabs"
-            width={138}
-            height={30}
-            className="h-7 w-auto"
-          />
+          <BrandLogo />
         </Link>
         <Link
           href={`/dashboard/${slug}`}
@@ -520,11 +528,11 @@ export function BookingsClient({
           ‹ Översikt
         </Link>
         <span
-          className={`mt-2 flex items-center gap-1.5 text-[11px] ${live ? "text-emerald-400" : "text-[var(--w-muted)]"}`}
+          className={`mt-2 flex items-center gap-1.5 text-[11px] ${live ? "text-status-seated-fg" : "text-[var(--w-muted)]"}`}
           title={live ? "Realtidsuppdatering aktiv" : "Ansluter…"}
         >
           <span
-            className={`h-1.5 w-1.5 rounded-full ${live ? "bg-emerald-400" : "bg-[var(--w-muted)]"}`}
+            className={`h-1.5 w-1.5 rounded-full ${live ? "bg-status-seated-dot" : "bg-[var(--w-muted)]"}`}
           />
           {live ? "Live" : "Ansluter"}
         </span>
@@ -541,8 +549,14 @@ export function BookingsClient({
             className="h-10 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-3 text-sm focus:border-[var(--w-accent)] focus:outline-none"
           />
           <button
+            onClick={() => setNewBookingOpen(true)}
+            className="h-11 rounded-xl border border-[var(--w-line)] px-4 text-sm font-semibold text-[var(--w-muted)] hover:border-[var(--w-accent)] hover:text-[var(--w-ink)] transition"
+          >
+            Ny bokning
+          </button>
+          <button
             onClick={() => setDropInOpen(true)}
-            className="h-10 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] shadow-lg shadow-black/25 hover:brightness-110 transition"
+            className="h-11 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on shadow-lg shadow-black/25 hover:brightness-110 transition"
           >
             + Drop-in
           </button>
@@ -581,15 +595,19 @@ export function BookingsClient({
                   Ledig
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[var(--w-accent)]/70" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-pending-dot" />
+                  Väntar
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-booked-dot" />
                   Bokad
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-seated-dot" />
                   Sitter
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-status-late-dot" />
                   Försenad
                 </span>
               </span>
@@ -682,7 +700,7 @@ export function BookingsClient({
                       width={104}
                       height={28}
                       rx={14}
-                      fill="#1e1e1e"
+                      fill="var(--bg-hover)"
                       stroke="var(--w-accent)"
                     />
                     <text
@@ -726,126 +744,186 @@ export function BookingsClient({
                   minutesSinceStart(b, now) > 0;
                 const sinceStart = minutesSinceStart(b, now);
                 const draggable = OCCUPYING.has(b.status) && b.tableId;
+                const cancelArmed = cancelArmedId === b.id;
                 return (
                   <div
                     key={b.id}
-                    onClick={() => focusBooking(b)}
+                    onClick={() => {
+                      focusBooking(b);
+                      setModalBookingId(b.id);
+                    }}
                     className={`cursor-pointer rounded-xl border p-3 transition-colors ${
                       selectedBookingId === b.id
                         ? "border-[var(--w-accent)] bg-[var(--w-accent)]/5"
                         : "border-[var(--w-line)] bg-[var(--w-panel)] hover:border-[var(--w-muted)]"
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      {draggable && (
-                        <span
-                          onPointerDown={(e) => onListDragStart(e, b)}
-                          onPointerMove={(e) => onListDragMove(e, b)}
-                          onPointerUp={() => void onListDragEnd()}
-                          // Släppet avfyrar ett click som annars bubblar till
-                          // kortets onClick → focusBooking → flikbyte till
-                          // bokningens GAMLA rum mitt i släppet
-                          onClick={(e) => e.stopPropagation()}
-                          title="Dra till ett bord på kartan"
-                          className="cursor-grab touch-none select-none rounded px-1 text-[var(--w-muted)] hover:text-[var(--w-accent)]"
-                        >
-                          ⠿
-                        </span>
-                      )}
-                      <span className="font-mono text-sm">
-                        {formatClock(b.startsAt)}
-                      </span>
-                      <span className="truncate text-sm font-medium">
-                        {b.guestName}
-                      </span>
-                      <span className="ml-auto shrink-0 text-xs text-[var(--w-muted)]">
-                        {b.partySize} pers · {table?.name ?? "—"}
-                      </span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${meta.classes}`}
-                      >
-                        {meta.label}
-                      </span>
-                      <span className="text-[10px] text-[var(--w-muted)]">
-                        {b.createdBy === "widget"
-                          ? "Widget"
-                          : b.createdBy === "dropin"
-                            ? "Drop-in"
-                            : "AI"}
-                      </span>
-                      {b.childrenCount > 0 && (
-                        <span className="text-[10px] text-[var(--w-muted)]">
-                          varav {b.childrenCount} barn
-                        </span>
-                      )}
-                      {b.guestName === "Drop-in" && OCCUPYING.has(b.status) && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setAttachBookingId(b.id);
-                          }}
-                          className="rounded-lg border border-[var(--w-accent)]/50 px-2 py-0.5 text-[10px] font-medium text-[var(--w-accent)] hover:bg-[var(--w-accent)]/10 transition"
-                        >
-                          Koppla kund
-                        </button>
-                      )}
-                      {late && (
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                            sinceStart <= GRACE_MINUTES
-                              ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
-                              : "border-red-500/40 bg-red-500/10 text-red-400"
-                          }`}
-                        >
-                          {sinceStart <= GRACE_MINUTES
-                            ? `Släpps om ${GRACE_MINUTES - sinceStart} min`
-                            : `Försenad ${sinceStart} min`}
-                        </span>
-                      )}
-                      <span className="ml-auto flex gap-1">
-                        {(b.status === "PENDING" || b.status === "CONFIRMED") && (
-                          <>
-                            <ActionButton
-                              label="Anlänt"
-                              tone="green"
-                              onClick={() => {
-                                focusBooking(b);
-                                void patchBooking(b.id, { status: "SEATED" });
+                    <div className="flex items-start gap-3">
+                      <div className="flex shrink-0 flex-col items-center gap-1">
+                        <Avatar name={b.guestName} size={40} />
+                        {draggable && (
+                          <span
+                            onPointerDown={(e) => onListDragStart(e, b)}
+                            onPointerMove={(e) => onListDragMove(e, b)}
+                            onPointerUp={() => void onListDragEnd()}
+                            // Släppet avfyrar ett click som annars bubblar till
+                            // kortets onClick → focusBooking → flikbyte till
+                            // bokningens GAMLA rum mitt i släppet
+                            onClick={(e) => e.stopPropagation()}
+                            title="Dra till ett bord på kartan"
+                            className="cursor-grab touch-none select-none rounded px-2 py-1 text-[var(--w-muted)] hover:text-[var(--w-accent)]"
+                          >
+                            ⠿
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-semibold">
+                            {b.guestName}
+                          </span>
+                          <span className="font-mono text-sm">
+                            {formatClock(b.startsAt)}
+                          </span>
+                          <span className="ml-auto shrink-0 text-xs text-[var(--w-muted)]">
+                            {b.partySize} pers · {table?.name ?? "—"} ·{" "}
+                            {SOURCE_LABELS[b.createdBy] ?? "AI-mejl"}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${meta.classes}`}
+                          >
+                            {meta.label}
+                          </span>
+                          {b.childrenCount > 0 && (
+                            <span className="text-[10px] text-[var(--w-muted)]">
+                              varav {b.childrenCount} barn
+                            </span>
+                          )}
+                          {b.allergyNote && (
+                            <span className="rounded-full border border-status-late-border bg-status-late-bg px-2 py-0.5 text-[10px] font-medium text-status-late-fg">
+                              Allergi
+                            </span>
+                          )}
+                          {b.guestName === "Drop-in" && OCCUPYING.has(b.status) && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAttachBookingId(b.id);
                               }}
-                            />
-                            {late && (
+                              className="rounded-lg border border-[var(--w-accent)]/50 px-2 py-0.5 text-[10px] font-medium text-[var(--w-accent)] hover:bg-[var(--w-accent)]/10 transition"
+                            >
+                              Koppla kund
+                            </button>
+                          )}
+                          {late && (
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                                sinceStart <= GRACE_MINUTES
+                                  ? "border-status-grace-border bg-status-grace-bg text-status-grace-fg"
+                                  : "border-status-late-border bg-status-late-bg text-status-late-fg"
+                              }`}
+                            >
+                              {sinceStart <= GRACE_MINUTES
+                                ? `Släpps om ${GRACE_MINUTES - sinceStart} min`
+                                : `Försenad ${sinceStart} min`}
+                            </span>
+                          )}
+                        </div>
+                        {/* Åtgärdsrad — 44 pt träffytor (iPad under service) */}
+                        {cancelArmed ? (
+                          <div
+                            className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-status-late-border bg-status-late-bg px-3 py-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-xs font-medium text-status-late-fg">
+                              Avboka bokningen?
+                            </span>
+                            <span className="ml-auto flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setCancelArmedId(null);
+                                  void patchBooking(b.id, {
+                                    status: "CANCELLED",
+                                  });
+                                }}
+                                className="min-h-11 rounded-lg bg-[#b5503f] px-3 text-xs font-semibold text-white hover:brightness-110 transition"
+                              >
+                                Ja, avboka
+                              </button>
+                              <button
+                                onClick={() => setCancelArmedId(null)}
+                                className="min-h-11 rounded-lg border border-[var(--w-line)] px-3 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+                              >
+                                Ångra
+                              </button>
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="mt-1.5 flex flex-wrap justify-end gap-1.5">
+                            {b.status === "PENDING" && (
                               <ActionButton
-                                label="Släpp bordet"
-                                tone="red"
+                                label="Bekräfta"
+                                tone="green"
                                 onClick={() => {
                                   focusBooking(b);
-                                  void patchBooking(b.id, { status: "NO_SHOW" });
+                                  void patchBooking(b.id, {
+                                    status: "CONFIRMED",
+                                  });
                                 }}
                               />
                             )}
-                            <ActionButton
-                              label="Avboka"
-                              tone="neutral"
-                              onClick={() => {
-                                focusBooking(b);
-                                void patchBooking(b.id, { status: "CANCELLED" });
-                              }}
-                            />
-                          </>
+                            {(b.status === "PENDING" ||
+                              b.status === "CONFIRMED") && (
+                              <>
+                                <ActionButton
+                                  label="Anlänt"
+                                  tone="green"
+                                  onClick={() => {
+                                    focusBooking(b);
+                                    void patchBooking(b.id, {
+                                      status: "SEATED",
+                                    });
+                                  }}
+                                />
+                                {late && (
+                                  <ActionButton
+                                    label="Släpp bordet"
+                                    tone="red"
+                                    onClick={() => {
+                                      focusBooking(b);
+                                      void patchBooking(b.id, {
+                                        status: "NO_SHOW",
+                                      });
+                                    }}
+                                  />
+                                )}
+                                <ActionButton
+                                  label="Avboka…"
+                                  tone="neutral"
+                                  onClick={() => {
+                                    focusBooking(b);
+                                    setCancelArmedId(b.id);
+                                  }}
+                                />
+                              </>
+                            )}
+                            {b.status === "SEATED" && (
+                              <ActionButton
+                                label="Avsluta"
+                                tone="neutral"
+                                onClick={() => {
+                                  focusBooking(b);
+                                  void patchBooking(b.id, {
+                                    status: "COMPLETED",
+                                  });
+                                }}
+                              />
+                            )}
+                          </div>
                         )}
-                        {b.status === "SEATED" && (
-                          <ActionButton
-                            label="Avsluta"
-                            tone="neutral"
-                            onClick={() => {
-                              focusBooking(b);
-                              void patchBooking(b.id, { status: "COMPLETED" });
-                            }}
-                          />
-                        )}
-                      </span>
+                      </div>
                     </div>
                   </div>
                 );
@@ -855,19 +933,34 @@ export function BookingsClient({
         </div>
       </main>
 
-      {/* Gästmodal: klick (utan drag) på ett incheckat bord */}
+      {/* Bokningsmodal: klick på kort i listan eller upptaget bord på kartan */}
       {modalBooking && (
-        <GuestModal
+        <BookingModal
+          key={modalBooking.id}
           booking={modalBooking}
+          date={date}
           tableName={
             data?.tables.find((t) => t.id === modalBooking.tableId)?.name ?? "Bord"
           }
           now={now}
-          onComplete={() => {
-            setModalBookingId(null);
-            void patchBooking(modalBooking.id, { status: "COMPLETED" });
-          }}
+          patchBooking={patchBooking}
           onClose={() => setModalBookingId(null)}
+        />
+      )}
+
+      {/* Ny bokning: namn + telefon för ny gäst inline */}
+      {newBookingOpen && data && (
+        <NewBookingModal
+          slug={slug}
+          date={date}
+          timeSlots={timeSlots}
+          tables={data.tables}
+          rooms={data.rooms}
+          onClose={() => setNewBookingOpen(false)}
+          onCreated={() => {
+            setNewBookingOpen(false);
+            void fetchDay(dateRef.current);
+          }}
         />
       )}
 
@@ -904,9 +997,9 @@ export function BookingsClient({
           visar även VARFÖR ett bord inte går att släppa på */}
       {listDrag && data && (
         <div
-          className={`pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-[#1e1e1e] px-3 py-1.5 text-xs shadow-lg ${
+          className={`pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-hoverbg px-3 py-1.5 text-xs shadow-lg ${
             listDrag.hoverTableId && !listDrag.hoverValid
-              ? "border-red-400/70 text-red-300"
+              ? "border-status-late-border text-status-late-fg"
               : "border-[var(--w-accent)] text-[var(--w-ink)]"
           }`}
           style={{ left: listDrag.x, top: listDrag.y }}
@@ -919,22 +1012,31 @@ export function BookingsClient({
   );
 }
 
-function GuestModal({
+function BookingModal({
   booking,
+  date,
   tableName,
   now,
-  onComplete,
+  patchBooking,
   onClose,
 }: {
   booking: Booking;
+  date: string;
   tableName: string;
   now: number;
-  onComplete: () => void;
+  patchBooking: (
+    id: string,
+    body: {
+      status?: string;
+      arrivedCount?: number;
+      staffNote?: string | null;
+      date?: string;
+      time?: string;
+      endTime?: string;
+    },
+  ) => Promise<boolean>;
   onClose: () => void;
 }) {
-  const seatedMinutes = booking.seatedAt
-    ? Math.max(0, Math.floor((now - new Date(booking.seatedAt).getTime()) / 60_000))
-    : null;
   const clock = (iso: string) =>
     new Date(iso).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
   const dateTime = (iso: string) =>
@@ -945,6 +1047,64 @@ function GuestModal({
       minute: "2-digit",
     });
 
+  // Lokal redigeringsbuffert (monteras om per bokning via key={booking.id}) —
+  // realtime-refetchar får inte skriva över pågående inmatning
+  const [fromTime, setFromTime] = useState(() => clock(booking.startsAt));
+  const [toTime, setToTime] = useState(() => clock(booking.endsAt));
+  const [note, setNote] = useState(booking.staffNote ?? "");
+  const [arrived, setArrived] = useState(
+    booking.arrivedCount ?? booking.partySize,
+  );
+  const [cancelArmed, setCancelArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const seatedMinutes = booking.seatedAt
+    ? Math.max(0, Math.floor((now - new Date(booking.seatedAt).getTime()) / 60_000))
+    : null;
+  const meta = STATUS_META[booking.status] ?? STATUS_META.PENDING;
+  const active = OCCUPYING.has(booking.status);
+
+  async function saveTimes() {
+    if (
+      fromTime === clock(booking.startsAt) &&
+      toTime === clock(booking.endsAt)
+    )
+      return;
+    setBusy(true);
+    const ok = await patchBooking(booking.id, {
+      date,
+      time: fromTime,
+      endTime: toTime,
+    });
+    setBusy(false);
+    if (!ok) {
+      setFromTime(clock(booking.startsAt));
+      setToTime(clock(booking.endsAt));
+    }
+  }
+
+  async function saveArrived(next: number) {
+    const clamped = Math.max(0, Math.min(50, next));
+    setArrived(clamped);
+    await patchBooking(booking.id, { arrivedCount: clamped });
+  }
+
+  async function saveNote() {
+    if ((booking.staffNote ?? "") === note.trim()) return;
+    await patchBooking(booking.id, { staffNote: note.trim() || null });
+  }
+
+  async function setStatus(status: string) {
+    setBusy(true);
+    const ok = await patchBooking(booking.id, { status });
+    setBusy(false);
+    if (ok && (status === "COMPLETED" || status === "CANCELLED" || status === "NO_SHOW"))
+      onClose();
+  }
+
+  const timeInputClass =
+    "mt-1 w-full rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-2 py-2 font-mono text-sm focus:border-[var(--w-accent)] focus:outline-none";
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
@@ -952,41 +1112,73 @@ function GuestModal({
     >
       <div
         role="dialog"
-        aria-label={`Gästinfo för ${booking.guestName}`}
+        aria-label={`Bokning för ${booking.guestName}`}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
       >
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
-              {tableName} · {booking.partySize} pers
-            </p>
-            <h3 className="mt-1 text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
-              {booking.guestName}
-            </h3>
+          <div className="flex items-center gap-3">
+            <Avatar name={booking.guestName} size={46} />
+            <div>
+              <h3 className="text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
+                {booking.guestName}
+              </h3>
+              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
+                {tableName} · {booking.partySize} pers
+                {booking.childrenCount > 0
+                  ? ` · varav ${booking.childrenCount} barn`
+                  : ""}
+              </p>
+            </div>
           </div>
-          <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
-            Sitter
+          <span
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${meta.classes}`}
+          >
+            {meta.label}
           </span>
         </div>
 
+        {/* Tid: Från/Till — validering mot öppettider + krockar sker i API:t */}
+        {active && (
+          <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+            <label>
+              <span className="text-xs text-[var(--w-muted)]">Från</span>
+              <input
+                type="time"
+                value={fromTime}
+                onChange={(e) => setFromTime(e.target.value)}
+                onBlur={() => void saveTimes()}
+                className={timeInputClass}
+              />
+            </label>
+            <label>
+              <span className="text-xs text-[var(--w-muted)]">Till</span>
+              <input
+                type="time"
+                value={toTime}
+                onChange={(e) => setToTime(e.target.value)}
+                onBlur={() => void saveTimes()}
+                className={timeInputClass}
+              />
+            </label>
+          </div>
+        )}
+
         <dl className="mt-5 space-y-3 text-sm">
-          <div className="flex justify-between gap-4">
-            <dt className="text-[var(--w-muted)]">Anlände</dt>
-            <dd className="font-mono">
-              {booking.seatedAt ? clock(booking.seatedAt) : "—"}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[var(--w-muted)]">Har suttit</dt>
-            <dd className="font-mono">
-              {seatedMinutes !== null ? `${seatedMinutes} min` : "—"}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[var(--w-muted)]">Bokad tid</dt>
-            <dd className="font-mono">{clock(booking.startsAt)}</dd>
-          </div>
+          {booking.seatedAt && (
+            <>
+              <div className="flex justify-between gap-4">
+                <dt className="text-[var(--w-muted)]">Anlände</dt>
+                <dd className="font-mono">{clock(booking.seatedAt)}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-[var(--w-muted)]">Har suttit</dt>
+                <dd className="font-mono">
+                  {seatedMinutes !== null ? `${seatedMinutes} min` : "—"}
+                </dd>
+              </div>
+            </>
+          )}
           <div className="flex justify-between gap-4">
             <dt className="text-[var(--w-muted)]">Bokningen gjordes</dt>
             <dd>{dateTime(booking.createdAt)}</dd>
@@ -997,20 +1189,306 @@ function GuestModal({
               <dd className="text-right">{booking.notes}</dd>
             </div>
           )}
+          {booking.allergyNote && (
+            <div className="flex justify-between gap-4">
+              <dt className="text-status-late-fg">Allergi</dt>
+              <dd className="text-right font-medium text-status-late-fg">
+                {booking.allergyNote}
+              </dd>
+            </div>
+          )}
         </dl>
+
+        {/* Antal anlända — kan skilja sig från bokat antal */}
+        {active && (
+          <div className="mt-5">
+            <span className="text-xs text-[var(--w-muted)]">
+              Antal gäster anlända
+            </span>
+            <div className="mt-1 flex items-center gap-3">
+              <button
+                onClick={() => void saveArrived(arrived - 1)}
+                disabled={arrived <= 0}
+                aria-label="Färre anlända"
+                className="h-11 w-11 rounded-lg border border-[var(--w-line)] text-lg text-[var(--w-muted)] hover:text-[var(--w-ink)] disabled:opacity-40 transition"
+              >
+                −
+              </button>
+              <span className="w-8 text-center font-mono text-lg">
+                {arrived}
+              </span>
+              <button
+                onClick={() => void saveArrived(arrived + 1)}
+                disabled={arrived >= 50}
+                aria-label="Fler anlända"
+                className="h-11 w-11 rounded-lg border border-[var(--w-line)] text-lg text-[var(--w-muted)] hover:text-[var(--w-ink)] disabled:opacity-40 transition"
+              >
+                +
+              </button>
+              <span className="text-xs text-[var(--w-muted)]">
+                av {booking.partySize} bokade — kan skilja sig från
+                ursprungligt antal
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Personalens anteckning — separat från gästens önskemål */}
+        <div className="mt-5">
+          <span className="text-xs text-[var(--w-muted)]">Anteckning</span>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => void saveNote()}
+            maxLength={500}
+            rows={2}
+            placeholder="Skriv en egen anteckning om bokningen…"
+            className="mt-1 w-full resize-none rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-3 py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
+          />
+        </div>
+
+        {/* Åtgärder */}
+        <div className="mt-5 space-y-2">
+          {booking.status === "PENDING" && (
+            <button
+              onClick={() => void setStatus("CONFIRMED")}
+              disabled={busy}
+              className="min-h-11 w-full rounded-xl border border-status-seated-border bg-status-seated-bg text-sm font-semibold text-status-seated-fg hover:brightness-110 disabled:opacity-60 transition"
+            >
+              Bekräfta bokningen
+            </button>
+          )}
+          {(booking.status === "PENDING" || booking.status === "CONFIRMED") && (
+            <button
+              onClick={() => void setStatus("SEATED")}
+              disabled={busy}
+              className="min-h-11 w-full rounded-xl bg-[var(--w-accent)] text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
+            >
+              Markera som anländ
+            </button>
+          )}
+          {booking.status === "SEATED" && (
+            <button
+              onClick={() => void setStatus("COMPLETED")}
+              disabled={busy}
+              className="min-h-11 w-full rounded-xl bg-[var(--w-accent)] text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
+            >
+              Avsluta besöket
+            </button>
+          )}
+          {active &&
+            (cancelArmed ? (
+              <div className="flex items-center gap-2 rounded-xl border border-status-late-border bg-status-late-bg px-3 py-2">
+                <span className="text-xs font-medium text-status-late-fg">
+                  Avboka bokningen?
+                </span>
+                <span className="ml-auto flex gap-2">
+                  <button
+                    onClick={() => void setStatus("CANCELLED")}
+                    disabled={busy}
+                    className="min-h-11 rounded-lg bg-[#b5503f] px-3 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60 transition"
+                  >
+                    Ja, avboka
+                  </button>
+                  <button
+                    onClick={() => setCancelArmed(false)}
+                    className="min-h-11 rounded-lg border border-[var(--w-line)] px-3 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+                  >
+                    Ångra
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <button
+                onClick={() => setCancelArmed(true)}
+                className="min-h-11 w-full rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
+              >
+                Avboka…
+              </button>
+            ))}
+          <button
+            onClick={onClose}
+            className="min-h-11 w-full rounded-xl border border-[var(--w-line)] text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+          >
+            Stäng
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewBookingModal({
+  slug,
+  date,
+  timeSlots,
+  tables,
+  rooms,
+  onClose,
+  onCreated,
+}: {
+  slug: string;
+  date: string;
+  timeSlots: number[];
+  tables: TableRow[];
+  rooms: Room[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+  const defaultSlot =
+    timeSlots.find((m) => m >= nowM) ?? timeSlots[0] ?? 17 * 60;
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [time, setTime] = useState(formatMinutes(defaultSlot));
+  const [party, setParty] = useState(2);
+  const [tableId, setTableId] = useState<string>(""); // "" = auto
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create() {
+    if (!name.trim()) {
+      setError("Ange gästens namn.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/restaurants/${slug}/bookings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date,
+          time,
+          partySize: party,
+          ...(tableId ? { tableId } : {}),
+          guest: {
+            name: name.trim(),
+            ...(phone.trim() ? { phone: phone.trim() } : {}),
+          },
+          ...(notes.trim() ? { notes: notes.trim() } : {}),
+          onSite: false,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Kunde inte skapa bokningen.");
+        return;
+      }
+      onCreated();
+    } catch {
+      setError("Något gick fel — prova igen.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fitting = tables.filter((t) => t.capacity >= party);
+  const inputClass =
+    "mt-1 w-full rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-2 py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-label="Ny bokning"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
+      >
+        <h3 className="text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
+          Ny bokning · {date}
+        </h3>
+        <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
+          <label className="col-span-2">
+            <span className="text-xs text-[var(--w-muted)]">Gästens namn</span>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="För- och efternamn"
+              className={inputClass}
+            />
+          </label>
+          <label className="col-span-2">
+            <span className="text-xs text-[var(--w-muted)]">
+              Telefon (valfritt)
+            </span>
+            <input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="070-123 45 67"
+              className={inputClass}
+            />
+          </label>
+          <label>
+            <span className="text-xs text-[var(--w-muted)]">Antal</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={party}
+              onChange={(e) =>
+                setParty(Math.max(1, Number(e.target.value) || 1))
+              }
+              className={`${inputClass} font-mono`}
+            />
+          </label>
+          <label>
+            <span className="text-xs text-[var(--w-muted)]">Tid</span>
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className={`${inputClass} font-mono`}
+            />
+          </label>
+          <label className="col-span-2">
+            <span className="text-xs text-[var(--w-muted)]">Bord</span>
+            <select
+              value={tableId}
+              onChange={(e) => setTableId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Auto (minsta lediga)</option>
+              {fitting.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.capacity} pl,{" "}
+                  {rooms.find((r) => r.id === t.roomId)?.name ?? "—"})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="col-span-2">
+            <span className="text-xs text-[var(--w-muted)]">Anteckning</span>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              maxLength={500}
+              placeholder="Allergier, önskemål, tillfälle…"
+              className={`${inputClass} resize-none`}
+            />
+          </label>
+        </div>
+
+        {error && <p className="mt-3 text-xs text-yellow-400">{error}</p>}
 
         <div className="mt-6 flex justify-end gap-2">
           <button
-            onClick={onComplete}
-            className="h-9 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+            onClick={onClose}
+            className="min-h-11 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
           >
-            Avsluta besöket
+            Avbryt
           </button>
           <button
-            onClick={onClose}
-            className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-[#141210] hover:brightness-110 transition"
+            onClick={() => void create()}
+            disabled={saving}
+            className="min-h-11 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
           >
-            Stäng
+            {saving ? "Skapar…" : "Skapa bokning"}
           </button>
         </div>
       </div>
@@ -1029,8 +1507,8 @@ function ActionButton({
 }) {
   const tones = {
     green:
-      "border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10",
-    red: "border-red-500/40 text-red-400 hover:bg-red-500/10",
+      "border-status-seated-border text-status-seated-fg hover:bg-status-seated-bg",
+    red: "border-status-late-border text-status-late-fg hover:bg-status-late-bg",
     neutral:
       "border-[var(--w-line)] text-[var(--w-muted)] hover:text-[var(--w-ink)]",
   };
@@ -1040,7 +1518,8 @@ function ActionButton({
         e.stopPropagation();
         onClick();
       }}
-      className={`rounded-lg border px-2 py-0.5 text-[10px] font-medium transition-colors ${tones[tone]}`}
+      // min-h-11 = 44 px — Apples riktlinje för träffytor på iPad under service
+      className={`min-h-11 rounded-lg border px-3 text-xs font-medium transition-colors ${tones[tone]}`}
     >
       {label}
     </button>
@@ -1096,31 +1575,34 @@ function DayTableGlyph({
     (booking.status === "PENDING" || booking.status === "CONFIRMED") &&
     sinceStart > 0;
 
-  let stroke = "var(--w-line)";
-  let fill = "#1e1e1e";
+  let stroke = "var(--status-free-border)";
+  let fill = "var(--bg-hover)";
   if (booking) {
     if (booking.status === "SEATED") {
-      stroke = "#34d399";
-      fill = "rgba(16,185,129,0.12)";
+      stroke = "var(--status-seated-dot)";
+      fill = "var(--status-seated-bg)";
     } else if (late && sinceStart > GRACE_MINUTES) {
-      stroke = "#f87171";
-      fill = "rgba(248,113,113,0.12)";
+      stroke = "var(--status-late-dot)";
+      fill = "var(--status-late-bg)";
     } else if (late) {
-      stroke = "#facc15";
-      fill = "rgba(250,204,21,0.10)";
+      stroke = "var(--status-grace-dot)";
+      fill = "var(--status-grace-bg)";
+    } else if (booking.status === "PENDING") {
+      stroke = "var(--status-pending-dot)";
+      fill = "var(--status-pending-bg)";
     } else {
-      stroke = "var(--w-accent)";
-      fill = "rgba(200,155,90,0.10)";
+      stroke = "var(--status-booked-dot)";
+      fill = "var(--status-booked-bg)";
     }
   }
-  if (dragging && isValidTarget) stroke = "#34d399";
+  if (dragging && isValidTarget) stroke = "var(--status-seated-dot)";
   if (isDragTarget) {
-    stroke = "#34d399";
-    fill = "rgba(16,185,129,0.22)";
+    stroke = "var(--status-seated-dot)";
+    fill = "var(--status-seated-bg)";
   }
   if (isInvalidHover) {
-    stroke = "#f87171";
-    fill = "rgba(248,113,113,0.10)";
+    stroke = "var(--status-late-dot)";
+    fill = "var(--status-late-bg)";
   }
 
   const chairs = chairPositions(table.capacity, w, h);
@@ -1145,7 +1627,7 @@ function DayTableGlyph({
           cx={c.x}
           cy={c.y}
           r={4.5}
-          fill="#2e2e2e"
+          fill="var(--bg-hover)"
           stroke={stroke}
           strokeWidth={1}
         />
@@ -1202,8 +1684,8 @@ function DayTableGlyph({
             fill={
               late
                 ? sinceStart > GRACE_MINUTES
-                  ? "#f87171"
-                  : "#facc15"
+                  ? "var(--status-late-fg)"
+                  : "var(--status-grace-fg)"
                 : "var(--w-muted)"
             }
             style={{ pointerEvents: "none" }}

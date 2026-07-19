@@ -1,0 +1,315 @@
+/*
+ * Design-tokens (DESIGN-SYSTEM.md §6, anpassade till temaväxling).
+ *
+ * Varje tema definierar SAMMA variabeluppsättning: ytor, linjer, text,
+ * accent, statusfärger och fonter — plus legacy-alias (--w-*) så att
+ * befintliga skärmar temas genom att byta sin inline-palett mot data-theme.
+ *
+ * Teman:
+ *   classic        — ursprungliga mörkgrön/guld-looken, pixelidentisk
+ *   warm           — GPG-språket, mörk varm (terrakotta + Instrument Serif)
+ *   light          — GPG ljus (adminens "Ljus" OCH widgetens "Ljus & varm")
+ *   widget-classic — widgetens ursprungliga nattsvarta look (Fraunces)
+ */
+
+/* Ljust läge: växla logga och invertera bildikoner ritade för mörk botten */
+[data-theme="light"] .logo-on-dark {
+  display: none;
+}
+[data-theme="light"] .logo-on-light {
+  display: block;
+}
+[data-theme="light"] .icon-on-dark {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* Tema-oberoende form-tokens */
+:root {
+  --radius-input: 8px;
+  --radius-btn: 10px;
+  --radius-card: 16px;
+  --radius-modal: 20px;
+  --radius-pill: 999px;
+  --shadow-card: 0 10px 26px rgba(0, 0, 0, 0.2);
+  --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.18);
+  --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.5);
+  --shadow-accent: 0 4px 14px rgba(192, 103, 63, 0.28);
+  --shadow-card-light: 0 8px 30px rgba(70, 55, 40, 0.06);
+}
+
+/* ============ CLASSIC — dagens mörkgrön/guld, exakt ============ */
+[data-theme="classic"] {
+  --bg-base: #0d100f;
+  --bg-app: #101312;
+  --bg-raised: #131715;
+  --bg-card: #161b19;
+  --bg-panel: #161b19;
+  --bg-canvas: #131715;
+  --bg-inset: #0d100f;
+  --bg-hover: #1c2220;
+  --border: #2a312d;
+  --border-card: #2a312d;
+  --border-input: #2a312d;
+  --divider: #222826;
+  --text-primary: #ede7dc;
+  --text-secondary: #cfc9bd;
+  --text-muted: #8b9389;
+  --text-faint: #8b9389;
+  --text-hint: #5f665f;
+
+  --accent: #c89b5a;
+  --accent-dark: #b3874a;
+  --accent-on: #141210;
+  --accent-chip-bg: rgba(200, 155, 90, 0.12);
+  --accent-chip-fg: #c89b5a;
+
+  --status-pending-bg: rgba(109, 144, 184, 0.1);
+  --status-pending-fg: #9db8d8;
+  --status-pending-dot: #6d90b8;
+  --status-pending-border: rgba(109, 144, 184, 0.4);
+  --status-booked-bg: rgba(200, 155, 90, 0.1);
+  --status-booked-fg: #c89b5a;
+  --status-booked-dot: #c89b5a;
+  --status-booked-border: rgba(200, 155, 90, 0.4);
+  --status-seated-bg: rgba(16, 185, 129, 0.1);
+  --status-seated-fg: #34d399;
+  --status-seated-dot: #10b981;
+  --status-seated-border: rgba(16, 185, 129, 0.4);
+  --status-late-bg: rgba(239, 68, 68, 0.1);
+  --status-late-fg: #f87171;
+  --status-late-dot: #ef4444;
+  --status-late-border: rgba(239, 68, 68, 0.4);
+  --status-grace-bg: rgba(250, 204, 21, 0.1);
+  --status-grace-fg: #facc15;
+  --status-grace-dot: #facc15;
+  --status-grace-border: rgba(250, 204, 21, 0.4);
+  --status-done-bg: rgba(139, 147, 137, 0.1);
+  --status-done-fg: #8b9389;
+  --status-done-dot: #8b9389;
+  --status-done-border: rgba(139, 147, 137, 0.4);
+  --status-free-bg: transparent;
+  --status-free-fg: #8b9389;
+  --status-free-dot: #4a5350;
+  --status-free-border: #2a312d;
+
+  --font-display-theme: var(--font-jakarta), system-ui, sans-serif;
+  --font-ui-theme: Arial, Helvetica, sans-serif;
+
+  /* Legacy-alias — befintliga skärmar läser dessa */
+  --w-bg: var(--bg-app);
+  --w-panel: var(--bg-panel);
+  --w-line: var(--border);
+  --w-ink: var(--text-primary);
+  --w-muted: var(--text-muted);
+  --w-accent: var(--accent);
+  --font-display: var(--font-display-theme);
+}
+
+/* ============ WARM — GPG-språket, mörk varm (§2.1, §2.3, §2.4) ============ */
+[data-theme="warm"] {
+  --bg-base: #16130f;
+  --bg-app: #1b1713;
+  --bg-raised: #1e1a15;
+  --bg-card: #262019;
+  --bg-panel: #221d17;
+  --bg-canvas: #201b15;
+  --bg-inset: #1a1611;
+  --bg-hover: #2c2620;
+  --border: #2e2820;
+  --border-card: #362c21;
+  --border-input: #3a332b;
+  --divider: #2a2419;
+  --text-primary: #f3ece3;
+  --text-secondary: #d8cbbc;
+  --text-muted: #b3a494;
+  --text-faint: #8a7d70;
+  --text-hint: #6b6053;
+
+  --accent: #c0673f;
+  --accent-dark: #a8542f;
+  --accent-on: #241a12;
+  --accent-chip-bg: #3a2c1e;
+  --accent-chip-fg: #f0c896;
+
+  --status-pending-bg: #26303d;
+  --status-pending-fg: #9db8d8;
+  --status-pending-dot: #6d90b8;
+  --status-pending-border: #3a4a5c;
+  --status-booked-bg: #3d3020;
+  --status-booked-fg: #e0a94f;
+  --status-booked-dot: #d1a24a;
+  --status-booked-border: #55431f;
+  --status-seated-bg: #1f3327;
+  --status-seated-fg: #7cc596;
+  --status-seated-dot: #4fae72;
+  --status-seated-border: #2d4a36;
+  --status-late-bg: #3a2320;
+  --status-late-fg: #e28a7a;
+  --status-late-dot: #d1594a;
+  --status-late-border: #59332c;
+  --status-grace-bg: #3d3520;
+  --status-grace-fg: #e5c25f;
+  --status-grace-dot: #d4b04a;
+  --status-grace-border: #574a22;
+  --status-done-bg: #2a251f;
+  --status-done-fg: #8a7d70;
+  --status-done-dot: #6b6053;
+  --status-done-border: #3a332b;
+  --status-free-bg: #241f19;
+  --status-free-fg: #9b8f80;
+  --status-free-dot: #4a4139;
+  --status-free-border: #362c21;
+
+  /* Samma typografi som classic — bara färgerna skiljer teman åt */
+  --font-display-theme: var(--font-jakarta), system-ui, sans-serif;
+  --font-ui-theme: Arial, Helvetica, sans-serif;
+
+  --w-bg: var(--bg-app);
+  --w-panel: var(--bg-panel);
+  --w-line: var(--border);
+  --w-ink: var(--text-primary);
+  --w-muted: var(--text-muted);
+  --w-accent: var(--accent);
+  --font-display: var(--font-display-theme);
+}
+
+/* ============ LIGHT — GPG ljus (§2.2/§6.1) ============ */
+[data-theme="light"] {
+  --bg-base: #f1ebe3;
+  --bg-app: #f7f3ee;
+  --bg-raised: #f7f3ee;
+  --bg-card: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-canvas: #faf7f2;
+  --bg-inset: #ffffff;
+  --bg-hover: #faf7f2;
+  --border: #ece6df;
+  --border-card: #ece6df;
+  --border-input: #e3ddd5;
+  --divider: #efe9e1;
+  --text-primary: #28231f;
+  --text-secondary: #4a443e;
+  --text-muted: #6b6259;
+  --text-faint: #9b8f83;
+  --text-hint: #b3a89c;
+
+  --accent: #c0673f;
+  --accent-dark: #a8542f;
+  --accent-on: #ffffff;
+  --accent-chip-bg: #f6e3d7;
+  --accent-chip-fg: #a8542f;
+
+  --status-pending-bg: #e2e9f2;
+  --status-pending-fg: #3e5a78;
+  --status-pending-dot: #6d90b8;
+  --status-pending-border: #c4d2e2;
+  --status-booked-bg: #f5ead6;
+  --status-booked-fg: #8a6420;
+  --status-booked-dot: #b08534;
+  --status-booked-border: #e6d4b3;
+  --status-seated-bg: #e3efe6;
+  --status-seated-fg: #2f5e40;
+  --status-seated-dot: #4fae72;
+  --status-seated-border: #c4ddcc;
+  --status-late-bg: #f7e3df;
+  --status-late-fg: #a03d2e;
+  --status-late-dot: #d1594a;
+  --status-late-border: #ecc9c2;
+  --status-grace-bg: #f7efd8;
+  --status-grace-fg: #8a6f16;
+  --status-grace-dot: #c9a53a;
+  --status-grace-border: #e8d9ab;
+  --status-done-bg: #efe9e1;
+  --status-done-fg: #6b6259;
+  --status-done-dot: #9b8f83;
+  --status-done-border: #ddd6cd;
+  --status-free-bg: #f3ede5;
+  --status-free-fg: #6b6259;
+  --status-free-dot: #b3a89c;
+  --status-free-border: #e3ddd5;
+
+  /* Widgetens ljusa bakgrundsgradient */
+  --bg-gradient-from: #f1ebe3;
+  --bg-gradient-to: #f7f3ee;
+  --shadow-card: var(--shadow-card-light);
+  --shadow-modal: 0 24px 60px rgba(70, 55, 40, 0.18);
+
+  /* Samma typografi som classic — bara färgerna skiljer teman åt */
+  --font-display-theme: var(--font-jakarta), system-ui, sans-serif;
+  --font-ui-theme: Arial, Helvetica, sans-serif;
+
+  --w-bg: var(--bg-app);
+  --w-panel: var(--bg-panel);
+  --w-line: var(--border);
+  --w-ink: var(--text-primary);
+  --w-muted: var(--text-muted);
+  --w-accent: var(--accent);
+  --font-display: var(--font-display-theme);
+}
+
+/* ============ WIDGET-CLASSIC — widgetens ursprungliga look, exakt ============ */
+[data-theme="widget-classic"] {
+  --bg-base: #050505;
+  --bg-app: #0d0d0d;
+  --bg-raised: #111111;
+  --bg-card: #151515;
+  --bg-panel: #151515;
+  --bg-canvas: #111111;
+  --bg-inset: #0a0a0a;
+  --bg-hover: #1b1b1b;
+  --border: #282828;
+  --border-card: #282828;
+  --border-input: #282828;
+  --divider: #1f1f1f;
+  --text-primary: #ede7dc;
+  --text-secondary: #cfc9bd;
+  --text-muted: #999999;
+  --text-faint: #999999;
+  --text-hint: #6b6b6b;
+
+  --accent: #c89b5a;
+  --accent-dark: #b3874a;
+  --accent-on: #141210;
+  --accent-chip-bg: rgba(200, 155, 90, 0.12);
+  --accent-chip-fg: #c89b5a;
+
+  --status-pending-bg: rgba(109, 144, 184, 0.1);
+  --status-pending-fg: #9db8d8;
+  --status-pending-dot: #6d90b8;
+  --status-pending-border: rgba(109, 144, 184, 0.4);
+  --status-booked-bg: rgba(200, 155, 90, 0.1);
+  --status-booked-fg: #c89b5a;
+  --status-booked-dot: #c89b5a;
+  --status-booked-border: rgba(200, 155, 90, 0.4);
+  --status-seated-bg: rgba(16, 185, 129, 0.1);
+  --status-seated-fg: #34d399;
+  --status-seated-dot: #10b981;
+  --status-seated-border: rgba(16, 185, 129, 0.4);
+  --status-late-bg: rgba(239, 68, 68, 0.1);
+  --status-late-fg: #f87171;
+  --status-late-dot: #ef4444;
+  --status-late-border: rgba(239, 68, 68, 0.4);
+  --status-grace-bg: rgba(250, 204, 21, 0.1);
+  --status-grace-fg: #facc15;
+  --status-grace-dot: #facc15;
+  --status-grace-border: rgba(250, 204, 21, 0.4);
+  --status-done-bg: rgba(153, 153, 153, 0.1);
+  --status-done-fg: #999999;
+  --status-done-dot: #999999;
+  --status-done-border: rgba(153, 153, 153, 0.4);
+  --status-free-bg: transparent;
+  --status-free-fg: #999999;
+  --status-free-dot: #4a4a4a;
+  --status-free-border: #282828;
+
+  --font-display-theme: var(--font-fraunces), Georgia, serif;
+  --font-ui-theme: Arial, Helvetica, sans-serif;
+
+  --w-bg: var(--bg-app);
+  --w-panel: var(--bg-panel);
+  --w-line: var(--border);
+  --w-ink: var(--text-primary);
+  --w-muted: var(--text-muted);
+  --w-accent: var(--accent);
+  --font-display: var(--font-display-theme);
+}

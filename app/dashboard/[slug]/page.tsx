@@ -219,20 +219,7 @@ export default async function DashboardPage({
     {
       href: `/company/${slug}/inbox`,
       title: "AI-inkorg",
-      iconNode: (
-        <svg
-          width="44"
-          height="44"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          className="text-ink opacity-85"
-        >
-          <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
-          <path d="M3 6.5l9 6.5 9-6.5" />
-        </svg>
-      ),
+      icon: "/mailiconoverview.png",
       description:
         "Gästmejlen AI:n har skrivit utkast till — granska, redigera och godkänn.",
       badge: pendingDrafts,

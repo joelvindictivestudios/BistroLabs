@@ -62,8 +62,9 @@ export function ModuleCard({
         {title}
       </span>
       <span className="group/info absolute right-4 top-4 z-10 opacity-0 transition-opacity motion-safe:duration-200 group-hover:opacity-100">
-        <FaInfoCircle className="h-4 w-4 text-[var(--w-muted)] transition-colors hover:text-white/80" />
-        <span className="pointer-events-none absolute right-0 top-6 block w-56 rounded-lg bg-black bg-[var(--w-panel)] p-3 text-left text-xs leading-relaxed text-ink-secondary opacity-0 shadow-lg transition-opacity motion-safe:duration-200 group-hover/info:opacity-100">
+        <FaInfoCircle className="h-4 w-4 text-[var(--w-muted)] transition-colors hover:text-ink" />
+        {/* bg-hoverbg = mörk panel i mörka teman, eggshell (#faf7f2) i ljusa */}
+        <span className="pointer-events-none absolute right-0 top-6 block w-56 rounded-lg border border-line-card bg-hoverbg p-3 text-left text-xs leading-relaxed text-ink opacity-0 shadow-lg transition-opacity motion-safe:duration-200 group-hover/info:opacity-100">
           {description}
         </span>
       </span>

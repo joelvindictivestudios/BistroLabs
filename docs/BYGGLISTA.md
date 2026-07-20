@@ -43,9 +43,9 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 4 — Auto-avbokningsjobbet
 *Beroende: etapp 1 + 3.*
 
-- [ ] Ny cron i `vercel.json` (förslagsvis var 15:e minut): `PENDING` utan kort där starttid − `cancellationWindowHours` passerats → `CANCELLED`, `cancelInfo` = auto (§2 p.4)
-- [ ] Utskick till gästen om auto-avbokningen (mejl nu, SMS kopplas i etapp 7) + `CommunicationLog`
-- [ ] Idempotent + skyddad med `CRON_SECRET`, samma mönster som reminders/gallring
+- [x] Ny cron i `vercel.json` (förslagsvis var 15:e minut): `PENDING` utan kort där starttid − `cancellationWindowHours` passerats → `CANCELLED`, `cancelInfo` = auto (§2 p.4)
+- [x] Utskick till gästen om auto-avbokningen (mejl nu, SMS kopplas i etapp 7) + `CommunicationLog`
+- [x] Idempotent + skyddad med `CRON_SECRET`, samma mönster som reminders/gallring
 
 **Klart när:** en kortlös preliminär bokning avbokas automatiskt vid deadline, gästen meddelas och bordet frigörs.
 

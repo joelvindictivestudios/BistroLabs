@@ -117,6 +117,7 @@ export async function checkAvailability(
   date: string, // "YYYY-MM-DD"
   time: string, // "HH:MM"
   partySize: number,
+  opts?: { excludeBookingId?: string },
 ): Promise<AvailabilityResult> {
   const hours = withinOpeningHours(config, date, time);
   if (!hours.ok) {
@@ -125,7 +126,9 @@ export async function checkAvailability(
   const { startsAt, endsAt } = hours;
 
   // Greedy: minsta bord som rymmer sällskapet (och tillåter så små sällskap —
-  // "endast 2"-bord har minSeats 2) och saknar överlappande bokning
+  // "endast 2"-bord har minSeats 2) och saknar överlappande bokning.
+  // excludeBookingId: gästens egen bokning vid ombokning via hanteringslänken —
+  // annars blockerar den sin egen flytt (t.ex. 30 min på samma bord).
   const tables = await prisma.diningTable.findMany({
     where: {
       restaurantId,
@@ -139,6 +142,9 @@ export async function checkAvailability(
           status: { notIn: ["CANCELLED", "NO_SHOW"] },
           startsAt: { lt: endsAt },
           endsAt: { gt: startsAt },
+          ...(opts?.excludeBookingId
+            ? { id: { not: opts.excludeBookingId } }
+            : {}),
         },
         select: { id: true },
       },
@@ -169,16 +175,15 @@ export async function checkAvailability(
 }
 
 /**
- * Alla lediga starttider för ett datum + sällskap, i steg om `stepMinutes`.
- * En DB-fråga för hela dagen — overlapp-kollen sker i minnet per slot.
+ * Alla bokningsbara starttider för ett datum enligt öppettiderna — utan
+ * hänsyn till beläggning. Skillnaden mot listAvailableSlots ger de
+ * FULLBOKADE tiderna (väntelistans CTA i widgeten, §3.8).
  */
-export async function listAvailableSlots(
-  restaurantId: string,
+export function slotCandidates(
   config: RestaurantConfig,
   date: string, // "YYYY-MM-DD"
-  partySize: number,
   stepMinutes = 30,
-): Promise<string[]> {
+): string[] {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
   if (config.closedDates.includes(date)) return []; // röd dag
   const weekday = WEEKDAY_KEYS[new Date(`${date}T12:00:00Z`).getUTCDay()];
@@ -197,6 +202,22 @@ export async function listAvailableSlots(
       candidates.push(`${hh}:${mm}`);
     }
   }
+  return candidates;
+}
+
+/**
+ * Alla lediga starttider för ett datum + sällskap, i steg om `stepMinutes`.
+ * En DB-fråga för hela dagen — overlapp-kollen sker i minnet per slot.
+ */
+export async function listAvailableSlots(
+  restaurantId: string,
+  config: RestaurantConfig,
+  date: string, // "YYYY-MM-DD"
+  partySize: number,
+  stepMinutes = 30,
+  opts?: { excludeBookingId?: string },
+): Promise<string[]> {
+  const candidates = slotCandidates(config, date, stepMinutes);
   if (candidates.length === 0) return [];
 
   const durationMs = config.bookingDurationMinutes * 60_000;
@@ -217,6 +238,9 @@ export async function listAvailableSlots(
           status: { notIn: ["CANCELLED", "NO_SHOW"] },
           startsAt: { lt: windowEnd },
           endsAt: { gt: windowStart },
+          ...(opts?.excludeBookingId
+            ? { id: { not: opts.excludeBookingId } }
+            : {}),
         },
         select: { startsAt: true, endsAt: true },
       },

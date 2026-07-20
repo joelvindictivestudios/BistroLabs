@@ -18,6 +18,8 @@ const patchSchema = z
     guestId: z.uuid().optional(), // koppla drop-in till en riktig kund
     arrivedCount: z.number().int().min(0).max(50).optional(),
     staffNote: z.string().max(500).nullable().optional(),
+    /** Valfri orsak vid avbokning — loggas i cancelInfo (§1). */
+    cancelReason: z.string().max(200).optional(),
     // Tidsändring: date+time (lokal restaurangtid); endTime valfri —
     // annars start + bookingDurationMinutes
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -32,6 +34,9 @@ const patchSchema = z
   })
   .refine((d) => d.endTime === undefined || d.time !== undefined, {
     message: "endTime kräver time.",
+  })
+  .refine((d) => d.cancelReason === undefined || d.status === "CANCELLED", {
+    message: "cancelReason kräver status CANCELLED.",
   });
 
 // PATCH /api/restaurants/{slug}/bookings/{id} — personalens verktyg i dagvyn:
@@ -72,8 +77,17 @@ export async function PATCH(
       { status: 400 },
     );
   }
-  const { tableId, status, guestId, arrivedCount, staffNote, date, time, endTime } =
-    parsed.data;
+  const {
+    tableId,
+    status,
+    guestId,
+    arrivedCount,
+    staffNote,
+    cancelReason,
+    date,
+    time,
+    endTime,
+  } = parsed.data;
 
   if (guestId !== undefined) {
     const guest = await prisma.guest.findFirst({
@@ -136,6 +150,17 @@ export async function PATCH(
       // GDPR-gallring: allergiuppgiften raderas när besöket är genomfört
       // (samtyckesloggen behålls som bevis)
       ...(completing ? { allergyNote: null } : {}),
+      // Avbokning: vem/varför/när (§1). Kortet behålls i 7 dagar för
+      // återaktivering (§3.5) — gallringscronen städar.
+      ...(status === "CANCELLED" && booking.status !== "CANCELLED"
+        ? {
+            cancelInfo: {
+              av: "personal",
+              ...(cancelReason?.trim() ? { orsak: cancelReason.trim() } : {}),
+              tidpunkt: new Date().toISOString(),
+            },
+          }
+        : {}),
     };
 
     const updated = completing

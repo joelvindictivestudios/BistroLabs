@@ -1,10 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { getBrowserSupabase } from "@/lib/auth/client";
+import {
+  CardFields,
+  cardReady,
+  type CardValue,
+} from "@/app/components/card-fields";
 
-// Bokningswidget i fem steg: gäster → datum → tid → uppgifter → bekräftat.
-// Signaturen är meningen som byggs upp medan man väljer:
-// "Ett bord för 2 · fre 10 juli · 19:00".
+// Bokningswidget: gäster → datum → tid → (konto) → uppgifter → (kort) →
+// bekräftat. Kortsteget visas när restaurangen kräver kortgaranti (§3.1);
+// kontovalet hoppar över för inloggade matgäster. Signaturen är meningen som
+// byggs upp medan man väljer: "Ett bord för 2 · fre 10 juli · 19:00".
 
 type Offering = {
   id: string;
@@ -30,9 +38,26 @@ type Props = {
   theme?: "classic" | "warm-light";
   /** Renderad inuti editorns preview-yta — fyll containern istället för viewporten. */
   embedded?: boolean;
+  /** No-show-skyddet (§2b) — styr kortsteget + policytexterna. */
+  policy?: {
+    noShowFeePerGuest: number;
+    cancellationWindowHours: number;
+    cardGuaranteeRequired: boolean;
+  };
+  /** Inloggad matgäst (kind: "guest") — hoppar kontovalssteget, prefyller. */
+  diner?: { name: string; phone: string; email: string } | null;
 };
 
-type Step = "start" | "party" | "date" | "time" | "details" | "done";
+type Step =
+  | "start"
+  | "party"
+  | "date"
+  | "time"
+  | "account"
+  | "login"
+  | "details"
+  | "card"
+  | "done";
 
 type Confirmation = {
   bookingId: string;
@@ -40,6 +65,19 @@ type Confirmation = {
   date: string;
   time: string;
   partySize: number;
+  cardLast4?: string | null;
+  manageUrl?: string | null;
+};
+
+/** Uppgifterna som hålls mellan uppgifts- och kortsteget (§3.1). */
+type GuestDetails = {
+  name?: string;
+  phone?: string;
+  email?: string;
+  children: number;
+  notes?: string;
+  allergies?: string;
+  allergyConsent: boolean;
 };
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -59,6 +97,12 @@ function formatLong(dateStr: string): string {
   });
 }
 
+/** "19:00" → "20:00" — väntelistans önskeintervall runt en fullbokad tid. */
+function plusOneHour(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  return `${String((h + 1) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 export function BookingWidget({
   slug,
   name,
@@ -73,6 +117,8 @@ export function BookingWidget({
   bookingStopDates = [],
   theme = "classic",
   embedded = false,
+  policy,
+  diner = null,
 }: Props) {
   const hasStart = offerings.length > 0;
   const [step, setStep] = useState<Step>(hasStart ? "start" : "party");
@@ -82,8 +128,24 @@ export function BookingWidget({
   const [time, setTime] = useState<string | null>(null);
   const [monthOffset, setMonthOffset] = useState(0);
   const [slots, setSlots] = useState<string[] | null>(null);
+  const [fullSlots, setFullSlots] = useState<string[]>([]);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  // Uppgifterna hålls här mellan uppgifts- och kortsteget — POST sker vid
+  // "Bekräfta bokning" i kortsteget (§3.1)
+  const [details, setDetails] = useState<GuestDetails | null>(null);
+  // Kontovalet (§3.1): "signup" ger lösenordsfältet i uppgiftsformuläret
+  const [accountMode, setAccountMode] = useState<"guest" | "signup">("guest");
+  const cardRequired = policy?.cardGuaranteeRequired ?? false;
+  // Väntelistan (§3.8): CTA vid fullbokade tider → namn + mobil → i kön
+  const [wl, setWl] = useState<{
+    open: boolean;
+    joined: boolean;
+    name: string;
+    phone: string;
+    wish: string;
+    error: string | null;
+  }>({ open: false, joined: false, name: "", phone: "", wish: "", error: null });
 
   // Byggs upp till en mening allteftersom valen görs
   const sentence = useMemo(() => {
@@ -100,7 +162,9 @@ export function BookingWidget({
     (d: string, p: number) => {
       const requestId = ++slotsRequestId.current;
       setSlots(null);
+      setFullSlots([]);
       setSlotsError(null);
+      setWl({ open: false, joined: false, name: "", phone: "", wish: "", error: null });
       fetch(`/api/widget/${slug}/slots?date=${d}&party=${p}`)
         .then((r) => r.json())
         .then((data) => {
@@ -108,8 +172,10 @@ export function BookingWidget({
           if (data.blockedReason) {
             setSlots([]);
             setSlotsError(data.blockedReason);
-          } else if (Array.isArray(data.slots)) setSlots(data.slots);
-          else setSlotsError(data.error ?? "Kunde inte hämta tider");
+          } else if (Array.isArray(data.slots)) {
+            setSlots(data.slots);
+            setFullSlots(Array.isArray(data.fullSlots) ? data.fullSlots : []);
+          } else setSlotsError(data.error ?? "Kunde inte hämta tider");
         })
         .catch(() => {
           if (requestId === slotsRequestId.current)
@@ -123,7 +189,10 @@ export function BookingWidget({
     if (step === "party" && hasStart) setStep("start");
     else if (step === "date") setStep("party");
     else if (step === "time") setStep("date");
-    else if (step === "details") setStep("time");
+    else if (step === "account") setStep("time");
+    else if (step === "login") setStep("account");
+    else if (step === "details") setStep(diner ? "time" : "account");
+    else if (step === "card") setStep("details");
   };
 
   return (
@@ -280,28 +349,239 @@ export function BookingWidget({
               {slotsError && (
                 <p className="text-sm text-[var(--w-accent)]">{slotsError}</p>
               )}
-              {slots?.length === 0 && (
+              {slots?.length === 0 && !slotsError && (
                 <p className="text-sm text-[var(--w-muted)]">
-                  Inga lediga tider den dagen — prova ett annat datum.
+                  Inga lediga tider den dagen — prova ett annat datum
+                  {fullSlots.length > 0 ? " eller ställ dig på väntelistan" : ""}.
                 </p>
               )}
-              {slots && slots.length > 0 && (
+              {slots && (slots.length > 0 || fullSlots.length > 0) && (
                 <div className="grid grid-cols-4 gap-2 font-mono text-sm">
-                  {slots.map((t) => (
-                    <ChoiceButton
-                      key={t}
-                      selected={time === t}
+                  {[...slots, ...fullSlots].sort().map((t) => {
+                    const full = !slots.includes(t);
+                    if (full) {
+                      // Fullbokad tid: gråad + öppnar väntelisteformen (§3.8)
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() =>
+                            setWl((s) => ({
+                              ...s,
+                              open: true,
+                              wish: `${t}–${plusOneHour(t)}`,
+                              error: null,
+                            }))
+                          }
+                          className="rounded-lg border border-[var(--w-line)] px-2 py-2.5 text-[var(--w-muted)]/40 line-through decoration-1 hover:border-[var(--w-muted)] transition"
+                          title="Fullbokat — ställ dig på väntelistan"
+                        >
+                          {t}
+                        </button>
+                      );
+                    }
+                    return (
+                      <ChoiceButton
+                        key={t}
+                        selected={time === t}
+                        onClick={() => {
+                          setTime(t);
+                          // Inloggad matgäst hoppar kontovalet (§3.1)
+                          setStep(diner ? "details" : "account");
+                        }}
+                      >
+                        {t}
+                      </ChoiceButton>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Väntelistans CTA (§3.8) */}
+              {fullSlots.length > 0 && !wl.joined && !wl.open && (
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-4 py-3">
+                  <span className="text-xs text-[var(--w-muted)]">
+                    Önskad tid fullbokad? Vi hör av oss om ett bord blir
+                    ledigt.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setWl((s) => ({
+                        ...s,
+                        open: true,
+                        wish: `${fullSlots[0]}–${plusOneHour(fullSlots[fullSlots.length - 1])}`,
+                        error: null,
+                      }))
+                    }
+                    className="shrink-0 rounded-lg border border-[var(--w-accent)]/50 px-3 py-2 text-xs font-semibold text-[var(--w-accent)] hover:bg-[var(--w-accent)]/10 transition"
+                  >
+                    Ställ mig på väntelistan
+                  </button>
+                </div>
+              )}
+              {wl.open && !wl.joined && party && date && (
+                <div className="mt-4 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] p-4">
+                  <p className="text-sm font-semibold">
+                    Väntelista · {wl.wish}
+                  </p>
+                  <p className="mt-0.5 text-xs text-[var(--w-muted)]">
+                    Vi skickar SMS om ett bord för {party}{" "}
+                    {party === 1 ? "gäst" : "gäster"} blir ledigt.
+                  </p>
+                  <div className="mt-3 grid grid-cols-[1fr_1fr_auto] gap-2">
+                    <input
+                      value={wl.name}
+                      onChange={(e) =>
+                        setWl((s) => ({ ...s, name: e.target.value }))
+                      }
+                      placeholder="Namn"
+                      className="w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
+                    />
+                    <input
+                      value={wl.phone}
+                      onChange={(e) =>
+                        setWl((s) => ({ ...s, phone: e.target.value }))
+                      }
+                      placeholder="Mobilnummer"
+                      inputMode="tel"
+                      className="w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        !wl.name.trim() || wl.phone.trim().length < 5
+                      }
                       onClick={() => {
-                        setTime(t);
-                        setStep("details");
+                        const [from, to] = wl.wish.split("–");
+                        void fetch(`/api/widget/${slug}/waitlist`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            name: wl.name.trim(),
+                            phone: wl.phone.trim(),
+                            partySize: party,
+                            date,
+                            wishedFrom: from,
+                            wishedTo: to,
+                          }),
+                        })
+                          .then(async (r) => {
+                            const d = await r.json();
+                            if (!r.ok) {
+                              setWl((s) => ({
+                                ...s,
+                                error: d.error ?? "Kunde inte ställa dig i kö.",
+                              }));
+                              return;
+                            }
+                            setWl((s) => ({ ...s, joined: true, open: false }));
+                          })
+                          .catch(() =>
+                            setWl((s) => ({
+                              ...s,
+                              error: "Kunde inte ställa dig i kö.",
+                            })),
+                          );
                       }}
+                      className="shrink-0 rounded-lg bg-[var(--w-accent)] px-3 py-2 text-xs font-semibold text-[#141210] hover:brightness-110 disabled:opacity-50 transition"
                     >
-                      {t}
-                    </ChoiceButton>
-                  ))}
+                      Ställ mig i kö
+                    </button>
+                  </div>
+                  {wl.error && (
+                    <p className="mt-2 text-xs text-yellow-400">{wl.error}</p>
+                  )}
+                </div>
+              )}
+              {wl.joined && (
+                <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-[var(--w-panel)] px-4 py-3 text-xs font-semibold text-emerald-400">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Du står på väntelistan — vi SMS:ar om ett bord blir ledigt.
+                  Du kan även boka en annan tid ovan.
                 </div>
               )}
             </StepShell>
+          )}
+
+          {/* Kontovalet (§3.1): logga in / skapa konto / fortsätt som gäst */}
+          {step === "account" && (
+            <StepShell label="Hur vill du fortsätta?">
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => setStep("login")}
+                  className="flex w-full items-center justify-between rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-4 py-3.5 text-left hover:border-[var(--w-muted)] transition"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold">
+                      Logga in
+                    </span>
+                    <span className="mt-0.5 block text-xs text-[var(--w-muted)]">
+                      Har du redan ett konto hos oss?
+                    </span>
+                  </span>
+                  <span aria-hidden className="text-[var(--w-muted)]">
+                    ›
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMode("signup");
+                    setStep("details");
+                  }}
+                  className="flex w-full items-center justify-between rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-4 py-3.5 text-left hover:border-[var(--w-muted)] transition"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold">
+                      Skapa konto
+                    </span>
+                    <span className="mt-0.5 block text-xs text-[var(--w-muted)]">
+                      Spara dina uppgifter till nästa besök
+                    </span>
+                  </span>
+                  <span aria-hidden className="text-[var(--w-muted)]">
+                    ›
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountMode("guest");
+                    setStep("details");
+                  }}
+                  className="flex w-full items-center justify-between rounded-xl border border-dashed border-[var(--w-line)] px-4 py-3.5 text-left hover:border-[var(--w-muted)] transition"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold">
+                      Fortsätt som gäst
+                    </span>
+                    <span className="mt-0.5 block text-xs text-[var(--w-muted)]">
+                      Boka utan konto
+                    </span>
+                  </span>
+                  <span aria-hidden className="text-[var(--w-muted)]">
+                    ›
+                  </span>
+                </button>
+              </div>
+            </StepShell>
+          )}
+
+          {step === "login" && (
+            <LoginStep onDone={() => setStep("details")} />
           )}
 
           {step === "details" && party && date && time && (
@@ -311,7 +591,30 @@ export function BookingWidget({
               date={date}
               time={time}
               offeringTitle={offering?.title ?? null}
+              signup={accountMode === "signup" && !diner}
+              diner={diner}
+              cardRequired={cardRequired}
               onEditParty={() => setStep("party")}
+              onContinue={(g) => {
+                setDetails(g);
+                setStep("card");
+              }}
+              onConfirmed={(c) => {
+                setConfirmation(c);
+                setStep("done");
+              }}
+            />
+          )}
+
+          {/* Kortsteget (§3.1): kort som garanti — inget dras nu */}
+          {step === "card" && party && date && time && details && policy && (
+            <CardStep
+              slug={slug}
+              party={party}
+              date={date}
+              time={time}
+              details={details}
+              policy={policy}
               onConfirmed={(c) => {
                 setConfirmation(c);
                 setStep("done");
@@ -331,7 +634,29 @@ export function BookingWidget({
                     {confirmation.bookingId.slice(0, 8)}
                   </span>
                 </p>
+                {confirmation.cardLast4 && (
+                  <p className="mt-1 text-sm text-[var(--w-muted)]">
+                    Kortgaranti{" "}
+                    <span className="font-mono">
+                      •••• {confirmation.cardLast4}
+                    </span>{" "}
+                    — inget har dragits.
+                  </p>
+                )}
               </div>
+              {confirmation.manageUrl && policy && (
+                <p className="mt-4 text-xs leading-relaxed text-[var(--w-muted)]">
+                  Behöver du ändra eller avboka? Använd länken i
+                  bekräftelsemejlet — kostnadsfritt fram till{" "}
+                  {policy.cancellationWindowHours} timmar före ankomst.{" "}
+                  <a
+                    href={confirmation.manageUrl}
+                    className="font-semibold text-[var(--w-accent)] underline-offset-2 hover:underline"
+                  >
+                    Hantera din bokning
+                  </a>
+                </p>
+              )}
               <button
                 onClick={() => {
                   setOffering(null);
@@ -339,6 +664,8 @@ export function BookingWidget({
                   setDate(null);
                   setTime(null);
                   setConfirmation(null);
+                  setDetails(null);
+                  setAccountMode("guest");
                   setStep(hasStart ? "start" : "party");
                 }}
                 className="mt-5 text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-[var(--w-accent)] rounded"
@@ -547,7 +874,11 @@ function DetailsForm({
   date,
   time,
   offeringTitle,
+  signup,
+  diner,
+  cardRequired,
   onEditParty,
+  onContinue,
   onConfirmed,
 }: {
   slug: string;
@@ -555,9 +886,17 @@ function DetailsForm({
   date: string;
   time: string;
   offeringTitle: string | null;
+  /** "Skapa konto"-varianten: lösenordsfält + konto skapas före bokningen. */
+  signup: boolean;
+  /** Inloggad matgäst — prefyller fälten. */
+  diner: { name: string; phone: string; email: string } | null;
+  /** Kortgaranti på: uppgifterna hålls och POST sker i kortsteget (§3.1). */
+  cardRequired: boolean;
   onEditParty: () => void;
+  onContinue: (g: GuestDetails) => void;
   onConfirmed: (c: Confirmation) => void;
 }) {
+  const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [children, setChildren] = useState(0);
@@ -569,8 +908,10 @@ function DetailsForm({
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     // E-post ELLER telefon krävs — namn är valfritt
+    const name = String(form.get("name") ?? "").trim();
     const phone = String(form.get("phone") ?? "").trim();
     const email = String(form.get("email") ?? "").trim();
+    const password = String(form.get("password") ?? "");
     if (!phone && !email) {
       setError("Ange e-post eller telefonnummer.");
       return;
@@ -581,9 +922,69 @@ function DetailsForm({
       );
       return;
     }
+    if (signup) {
+      if (!email) {
+        setError("E-post krävs för att skapa konto.");
+        return;
+      }
+      if (!name) {
+        setError("Ange ditt namn för kontot.");
+        return;
+      }
+      if (password.length < 8) {
+        setError("Lösenordet behöver minst 8 tecken.");
+        return;
+      }
+    }
     setSubmitting(true);
     setError(null);
     try {
+      // "Skapa konto" (§3.1): kontot skapas först, sen loggas gästen in —
+      // bokningen fortsätter oavsett om inloggningen skulle stanna
+      if (signup) {
+        const res = await fetch("/api/guest/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            ...(phone ? { phone } : {}),
+            email,
+            password,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Kontot kunde inte skapas — prova igen.");
+          return;
+        }
+        const supabase = getBrowserSupabase();
+        await supabase.auth.signInWithPassword({ email, password });
+      }
+
+      const notes =
+        [
+          offeringTitle ? `Sittning: ${offeringTitle}` : null,
+          String(form.get("wishes") ?? "").trim() || null,
+        ]
+          .filter(Boolean)
+          .join(". ") || undefined;
+      const guestDetails: GuestDetails = {
+        name: name || undefined,
+        phone: phone || undefined,
+        email: email || undefined,
+        children,
+        notes,
+        ...(allergies.trim()
+          ? { allergies: allergies.trim(), allergyConsent }
+          : { allergyConsent: false }),
+      };
+
+      // Kortgaranti på: uppgifterna hålls i state, POST sker i kortsteget
+      if (cardRequired) {
+        onContinue(guestDetails);
+        return;
+      }
+
       const res = await fetch(`/api/widget/${slug}/book`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -592,18 +993,15 @@ function DetailsForm({
           time,
           partySize: party,
           childrenCount: children,
-          name: String(form.get("name") ?? "").trim() || undefined,
-          phone: String(form.get("phone") ?? "").trim() || undefined,
-          email: String(form.get("email") ?? "").trim() || undefined,
-          notes:
-            [
-              offeringTitle ? `Sittning: ${offeringTitle}` : null,
-              String(form.get("wishes") ?? "").trim() || null,
-            ]
-              .filter(Boolean)
-              .join(". ") || undefined,
-          ...(allergies.trim()
-            ? { allergies: allergies.trim(), allergyConsent }
+          name: guestDetails.name,
+          phone: guestDetails.phone,
+          email: guestDetails.email,
+          notes,
+          ...(guestDetails.allergies
+            ? {
+                allergies: guestDetails.allergies,
+                allergyConsent: guestDetails.allergyConsent,
+              }
             : {}),
         }),
       });
@@ -620,16 +1018,40 @@ function DetailsForm({
     }
   }
 
+  async function logOut() {
+    const supabase = getBrowserSupabase();
+    await supabase.auth.signOut();
+    router.refresh();
+  }
+
   const inputClass =
     "w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
 
   return (
-    <StepShell label="Dina uppgifter">
+    <StepShell label={signup ? "Skapa ditt konto" : "Dina uppgifter"}>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {diner && (
+          <div className="flex items-center justify-between rounded-lg border border-[var(--w-line)] bg-[var(--w-panel)] px-3 py-2 text-xs">
+            <span className="text-[var(--w-muted)]">
+              Inloggad som{" "}
+              <span className="font-semibold text-[var(--w-ink)]">
+                {diner.name || diner.email}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void logOut()}
+              className="font-semibold text-[var(--w-accent)] underline-offset-2 hover:underline"
+            >
+              Logga ut
+            </button>
+          </div>
+        )}
         <input
           name="name"
-          placeholder="Namn (valfritt)"
+          placeholder={signup ? "Namn" : "Namn (valfritt)"}
           autoComplete="name"
+          defaultValue={diner?.name ?? ""}
           className={inputClass}
         />
         <div className="grid grid-cols-2 gap-4">
@@ -637,6 +1059,7 @@ function DetailsForm({
             name="phone"
             placeholder="Telefon"
             autoComplete="tel"
+            defaultValue={diner?.phone ?? ""}
             className={inputClass}
           />
           <input
@@ -644,12 +1067,22 @@ function DetailsForm({
             type="email"
             placeholder="E-post"
             autoComplete="email"
+            defaultValue={diner?.email ?? ""}
             className={inputClass}
           />
         </div>
         <p className="text-xs text-[var(--w-muted)]">
           Ange e-post eller telefonnummer så vi kan nå dig om bokningen.
         </p>
+        {signup && (
+          <input
+            name="password"
+            type="password"
+            placeholder="Skapa lösenord (minst 8 tecken)"
+            autoComplete="new-password"
+            className={inputClass}
+          />
+        )}
         {/* Totalen väljs i antalssteget; här anges hur många av dem som är barn */}
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <span className="text-[var(--w-muted)]">
@@ -723,7 +1156,13 @@ function DetailsForm({
           disabled={submitting}
           className="w-full h-12 rounded-md bg-[var(--w-accent)] text-accent-on text-sm font-medium tracking-wide hover:brightness-110 disabled:opacity-60 transition motion-safe:duration-150 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--w-accent)]"
         >
-          {submitting ? "Bokar…" : "Bekräfta bokningen"}
+          {submitting
+            ? cardRequired
+              ? "Sparar…"
+              : "Bokar…"
+            : cardRequired
+              ? "Fortsätt till kort"
+              : "Bekräfta bokningen"}
         </button>
         <p className="text-center text-xs text-[var(--w-muted)]">
           Genom att boka godkänner du vår{" "}
@@ -738,6 +1177,178 @@ function DetailsForm({
           .
         </p>
       </form>
+    </StepShell>
+  );
+}
+
+function LoginStep({ onDone }: { onDone: () => void }) {
+  const router = useRouter();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputClass =
+    "w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    setSubmitting(true);
+    setError(null);
+    const supabase = getBrowserSupabase();
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: String(form.get("email") ?? ""),
+      password: String(form.get("password") ?? ""),
+    });
+    setSubmitting(false);
+    if (authError) {
+      setError(
+        authError.message === "Invalid login credentials"
+          ? "Fel e-post eller lösenord."
+          : authError.message,
+      );
+      return;
+    }
+    // Servern läser sessionen och prefyller uppgifterna vid nästa render
+    router.refresh();
+    onDone();
+  }
+
+  return (
+    <StepShell label="Logga in">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-xs text-[var(--w-muted)]">
+          Logga in för att boka snabbare med sparade uppgifter.
+        </p>
+        <input
+          name="email"
+          type="email"
+          placeholder="E-post"
+          autoComplete="email"
+          required
+          className={inputClass}
+        />
+        <input
+          name="password"
+          type="password"
+          placeholder="Lösenord"
+          autoComplete="current-password"
+          required
+          className={inputClass}
+        />
+        {error && <p className="text-sm text-[var(--w-accent)]">{error}</p>}
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full h-12 rounded-md bg-[var(--w-accent)] text-accent-on text-sm font-medium tracking-wide hover:brightness-110 disabled:opacity-60 transition"
+        >
+          {submitting ? "Loggar in…" : "Logga in och fortsätt"}
+        </button>
+      </form>
+    </StepShell>
+  );
+}
+
+// Kortsteget (§3.1): kortet registreras som garanti — inget dras nu.
+// Bokningen skapas först här ("Bekräfta bokning") med de hållna uppgifterna.
+function CardStep({
+  slug,
+  party,
+  date,
+  time,
+  details,
+  policy,
+  onConfirmed,
+}: {
+  slug: string;
+  party: number;
+  date: string;
+  time: string;
+  details: GuestDetails;
+  policy: {
+    noShowFeePerGuest: number;
+    cancellationWindowHours: number;
+    cardGuaranteeRequired: boolean;
+  };
+  onConfirmed: (c: Confirmation) => void;
+}) {
+  const [card, setCard] = useState<CardValue>({ number: "", exp: "", cvc: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const expMatch = card.exp.match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
+      if (!expMatch) {
+        setError("Ange giltighetstid som MM/ÅÅ.");
+        return;
+      }
+      const res = await fetch(`/api/widget/${slug}/book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date,
+          time,
+          partySize: party,
+          childrenCount: details.children,
+          name: details.name,
+          phone: details.phone,
+          email: details.email,
+          notes: details.notes,
+          ...(details.allergies
+            ? {
+                allergies: details.allergies,
+                allergyConsent: details.allergyConsent,
+              }
+            : {}),
+          card: {
+            number: card.number,
+            expMonth: Number(expMatch[1]),
+            expYear: Number(expMatch[2]),
+            cvc: card.cvc,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Bokningen misslyckades — prova igen.");
+        return;
+      }
+      onConfirmed(data);
+    } catch {
+      setError("Något gick fel — prova igen.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <StepShell label="Bekräfta med kort">
+      <p className="text-xs text-[var(--w-muted)]">
+        Inget dras nu — kortet är endast en garanti vid utebliven ankomst.
+      </p>
+      <div className="mt-4">
+        <CardFields value={card} onChange={setCard} disabled={submitting} />
+      </div>
+      <p className="mt-4 rounded-lg border border-[var(--w-line)] bg-[var(--w-panel)] px-3 py-2.5 text-xs leading-relaxed text-[var(--w-muted)]">
+        Avboka kostnadsfritt fram till {policy.cancellationWindowHours} timmar
+        före ankomst. Vid no-show debiteras{" "}
+        <b className="text-[var(--w-ink)]">
+          {policy.noShowFeePerGuest} kr per gäst
+        </b>{" "}
+        ({(policy.noShowFeePerGuest * party).toLocaleString("sv-SE")} kr för
+        ert sällskap). Bokningen bekräftas automatiskt när kortet
+        registrerats.
+      </p>
+      {error && <p className="mt-3 text-sm text-[var(--w-accent)]">{error}</p>}
+      <button
+        type="button"
+        onClick={() => void submit()}
+        disabled={!cardReady(card) || submitting}
+        className="mt-4 w-full h-12 rounded-md bg-[var(--w-accent)] text-accent-on text-sm font-medium tracking-wide hover:brightness-110 disabled:opacity-50 transition"
+      >
+        {submitting ? "Bokar…" : "Bekräfta bokning"}
+      </button>
     </StepShell>
   );
 }

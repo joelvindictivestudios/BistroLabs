@@ -28,6 +28,8 @@ type Props = {
     openingHours: Record<string, { open: string; close: string }[]>;
     closedDates: string[];
     bookingStopDates: string[];
+    eventDates: string[];
+    depositDates: string[];
   };
 };
 
@@ -84,6 +86,12 @@ export function HoursClient({ slug, initialConfig }: Props) {
   const [stopDates, setStopDates] = useState<string[]>(
     initialConfig.bookingStopDates,
   );
+  const [eventDates, setEventDates] = useState<string[]>(
+    initialConfig.eventDates,
+  );
+  const [depositDates, setDepositDates] = useState<string[]>(
+    initialConfig.depositDates,
+  );
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +114,8 @@ export function HoursClient({ slug, initialConfig }: Props) {
           openingHours: hours,
           closedDates,
           bookingStopDates: stopDates,
+          eventDates,
+          depositDates,
         }),
       });
       if (!res.ok) {
@@ -283,12 +293,16 @@ export function HoursClient({ slug, initialConfig }: Props) {
         <CalendarSection
           closedDates={closedDates}
           stopDates={stopDates}
+          eventDates={eventDates}
+          depositDates={depositDates}
           weeklyClosed={WEEKDAYS.filter(({ key }) => hours[key].length === 0).map(
             ({ key }) => key,
           )}
-          onChange={(nextClosed, nextStops) => {
-            setClosedDates(nextClosed);
-            setStopDates(nextStops);
+          onChange={(next) => {
+            setClosedDates(next.closed);
+            setStopDates(next.stops);
+            setEventDates(next.events);
+            setDepositDates(next.deposits);
           }}
         />
       </div>
@@ -387,7 +401,7 @@ function TimeInput({
   );
 }
 
-type Pen = "red" | "stop";
+type Pen = "red" | "stop" | "event" | "deposit";
 
 const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
@@ -396,16 +410,28 @@ function toDateString(d: Date): string {
 }
 
 // Undantagskalendern (WaiterAid-stil): välj penna, klicka på dagar.
+// Fyra pennor (§3.11): Röd dag (stängt), Bokningsstopp, Event och Deposition.
+// Event/Deposition är endast märkning — blockerar inget; depositionsflödet
+// är utanför scope (§4).
 function CalendarSection({
   closedDates,
   stopDates,
+  eventDates,
+  depositDates,
   weeklyClosed,
   onChange,
 }: {
   closedDates: string[];
   stopDates: string[];
+  eventDates: string[];
+  depositDates: string[];
   weeklyClosed: string[];
-  onChange: (closed: string[], stops: string[]) => void;
+  onChange: (next: {
+    closed: string[];
+    stops: string[];
+    events: string[];
+    deposits: string[];
+  }) => void;
 }) {
   const [pen, setPen] = useState<Pen>("red");
   const [offset, setOffset] = useState(0);
@@ -425,23 +451,30 @@ function CalendarSection({
   const leadingBlanks = (first.getDay() + 6) % 7; // måndag först
 
   function toggle(dateStr: string) {
-    const inClosed = closedDates.includes(dateStr);
-    const inStops = stopDates.includes(dateStr);
-    if (pen === "red") {
-      onChange(
-        inClosed
-          ? closedDates.filter((d) => d !== dateStr)
-          : [...closedDates, dateStr].sort(),
-        stopDates.filter((d) => d !== dateStr), // en dag kan inte vara båda
-      );
-    } else {
-      onChange(
-        closedDates.filter((d) => d !== dateStr),
-        inStops
-          ? stopDates.filter((d) => d !== dateStr)
-          : [...stopDates, dateStr].sort(),
-      );
+    // En dag lever i EXAKT en av de fyra listorna (eller ingen):
+    // aktiv penna togglar sin lista, övriga rensas på dagen
+    const lists: Record<Pen, string[]> = {
+      red: closedDates,
+      stop: stopDates,
+      event: eventDates,
+      deposit: depositDates,
+    };
+    const next = {} as Record<Pen, string[]>;
+    for (const key of ["red", "stop", "event", "deposit"] as const) {
+      if (key === pen) {
+        next[key] = lists[key].includes(dateStr)
+          ? lists[key].filter((d) => d !== dateStr)
+          : [...lists[key], dateStr].sort();
+      } else {
+        next[key] = lists[key].filter((d) => d !== dateStr);
+      }
     }
+    onChange({
+      closed: next.red,
+      stops: next.stop,
+      events: next.event,
+      deposits: next.deposit,
+    });
   }
 
   return (
@@ -470,6 +503,24 @@ function CalendarSection({
             onClick={() => setPen("stop")}
           >
             Bokningsstopp
+          </PenButton>
+          <PenButton
+            active={pen === "event"}
+            dotClass="bg-purple-400"
+            activeClass="bg-purple-500/10 text-purple-300"
+            count={eventDates.length}
+            onClick={() => setPen("event")}
+          >
+            Event
+          </PenButton>
+          <PenButton
+            active={pen === "deposit"}
+            dotClass="bg-teal-300"
+            activeClass="bg-teal-500/10 text-teal-200"
+            count={depositDates.length}
+            onClick={() => setPen("deposit")}
+          >
+            Deposition
           </PenButton>
         </div>
 
@@ -512,6 +563,8 @@ function CalendarSection({
               const past = d < today;
               const isClosed = closedDates.includes(dateStr);
               const isStop = stopDates.includes(dateStr);
+              const isEvent = eventDates.includes(dateStr);
+              const isDeposit = depositDates.includes(dateStr);
               const isWeeklyClosed = weeklyClosed.includes(
                 WEEKDAY_KEYS[d.getDay()],
               );
@@ -526,9 +579,13 @@ function CalendarSection({
                       ? "Röd dag — klicka för att öppna igen"
                       : isStop
                         ? "Bokningsstopp — klicka för att ta bort"
-                        : isWeeklyClosed
-                          ? "Stängt enligt veckoschemat"
-                          : undefined
+                        : isEvent
+                          ? "Event — klicka för att ta bort"
+                          : isDeposit
+                            ? "Deposition — klicka för att ta bort"
+                            : isWeeklyClosed
+                              ? "Stängt enligt veckoschemat"
+                              : undefined
                   }
                   className={`relative h-10 rounded-lg text-sm tabular-nums transition-colors motion-safe:duration-150 ${
                     past
@@ -537,9 +594,13 @@ function CalendarSection({
                         ? "bg-red-500/15 font-semibold text-red-300 shadow-[inset_0_0_0_1px_rgba(248,113,113,0.5)]"
                         : isStop
                           ? "bg-yellow-500/10 font-semibold text-yellow-300 shadow-[inset_0_0_0_1px_rgba(250,204,21,0.45)]"
-                          : isWeeklyClosed
-                            ? "text-[var(--w-muted)]/45 hover:bg-[var(--w-bg)]"
-                            : "text-[var(--w-ink)]/85 hover:bg-[var(--w-bg)]"
+                          : isEvent
+                            ? "bg-purple-500/10 font-semibold text-purple-300 shadow-[inset_0_0_0_1px_rgba(192,132,252,0.45)]"
+                            : isDeposit
+                              ? "bg-teal-500/10 font-semibold text-teal-200 shadow-[inset_0_0_0_1px_rgba(94,234,212,0.4)]"
+                              : isWeeklyClosed
+                                ? "text-[var(--w-muted)]/45 hover:bg-[var(--w-bg)]"
+                                : "text-[var(--w-ink)]/85 hover:bg-[var(--w-bg)]"
                   } ${isToday ? "shadow-[inset_0_0_0_1px_var(--w-accent)]" : ""}`}
                 >
                   {i + 1}
@@ -557,6 +618,12 @@ function CalendarSection({
               drop-in
             </span>
             <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-purple-400" /> Event
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-teal-300" /> Deposition
+            </span>
+            <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-[var(--w-muted)]/40" />{" "}
               Stängt enl. schema
             </span>
@@ -566,6 +633,9 @@ function CalendarSection({
       <p className="mt-2 text-xs text-[var(--w-muted)]">
         Röd dag stänger dagen helt. Bokningsstopp låter befintliga bokningar stå
         kvar men stoppar nya från gäster — personalen kan alltid lägga drop-ins.
+        Event märker dagen som händelse; Deposition markerar förbokning med
+        avgift (själva depositionsflödet kommer senare) — ingen av dem blockerar
+        bokningar.
       </p>
     </section>
   );

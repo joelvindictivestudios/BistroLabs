@@ -85,6 +85,12 @@ const demoConfig: RestaurantConfig = {
   closedDates: [],
   bookingStopDates: [],
   sameDayCutoff: "14:00",
+  noShowFeePerGuest: 250,
+  cancellationWindowHours: 4,
+  cardGuaranteeRequired: true,
+  cardGuaranteeSince: null,
+  eventDates: [],
+  depositDates: [],
   theme: "warm",
   widgetTheme: "warm-light",
   voiceAgent: {

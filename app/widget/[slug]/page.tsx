@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db/client";
+import { getUser } from "@/lib/auth/server";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
 import { BookingWidget } from "./booking-widget";
 
@@ -26,6 +27,22 @@ export default async function WidgetPage({
   if (!restaurant || !restaurant.published) notFound();
 
   const config = parseRestaurantConfig(restaurant.config);
+
+  // Inloggad matgäst (kind: "guest") → kontovalssteget hoppas, uppgifterna
+  // prefylls. Ägare/övriga sessioner påverkar inte gästflödet.
+  const sessionUser = await getUser();
+  const meta = sessionUser?.user_metadata as
+    | { kind?: string; name?: string; phone?: string }
+    | undefined;
+  const diner =
+    sessionUser && meta?.kind === "guest"
+      ? {
+          name: meta.name ?? "",
+          phone: meta.phone ?? "",
+          email: sessionUser.email ?? "",
+        }
+      : null;
+
   const openDays = Object.entries(config.openingHours)
     .filter(([, ranges]) => ranges.length > 0)
     .map(([day]) => day);
@@ -52,6 +69,12 @@ export default async function WidgetPage({
       closedDates={config.closedDates}
       bookingStopDates={config.bookingStopDates}
       theme={config.widgetTheme}
+      policy={{
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cancellationWindowHours: config.cancellationWindowHours,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      }}
+      diner={diner}
     />
   );
 }

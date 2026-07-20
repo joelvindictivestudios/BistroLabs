@@ -7,7 +7,21 @@ import {
   withinOpeningHours,
 } from "@/lib/booking/availability";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
-import { sendEmail } from "@/lib/messaging/send";
+import { Prisma } from "@/lib/generated/prisma/client";
+import { sendCardLink } from "@/lib/messaging/card-link";
+import { chargeNoShowFee, releaseCard } from "@/lib/payments/psp";
+import { logCommunication, notifyGuest } from "@/lib/messaging/notify";
+import {
+  bekraftelseMail,
+  bekraftelseSms,
+  andringsnotisMail,
+  andringSms,
+  avbokningsbekraftelseMail,
+  avbokningSms,
+  formatBookingWhen,
+} from "@/lib/messaging/templates";
+import { buildManageUrl } from "@/lib/booking/manage-token";
+import { appBaseUrl } from "@/lib/urls";
 
 const patchSchema = z
   .object({
@@ -18,6 +32,16 @@ const patchSchema = z
     guestId: z.uuid().optional(), // koppla drop-in till en riktig kund
     arrivedCount: z.number().int().min(0).max(50).optional(),
     staffNote: z.string().max(500).nullable().optional(),
+    /** Valfri orsak vid avbokning — loggas i cancelInfo (§1). */
+    cancelReason: z.string().max(200).optional(),
+    /** Återaktivera avbokad bokning (§3.5): → CONFIRMED om kort finns, annars PENDING. */
+    reactivate: z.boolean().optional(),
+    /** No-show med debitering (§3.4): beloppet beräknas ALLTID server-side. */
+    chargeNoShowFee: z.boolean().optional(),
+    /** Ändra bokning (§3.10): antal, namn och telefon. */
+    partySize: z.number().int().min(1).max(50).optional(),
+    guestName: z.string().min(1).max(120).optional(),
+    guestPhone: z.string().min(5).max(30).nullable().optional(),
     // Tidsändring: date+time (lokal restaurangtid); endTime valfri —
     // annars start + bookingDurationMinutes
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -32,6 +56,15 @@ const patchSchema = z
   })
   .refine((d) => d.endTime === undefined || d.time !== undefined, {
     message: "endTime kräver time.",
+  })
+  .refine((d) => d.cancelReason === undefined || d.status === "CANCELLED", {
+    message: "cancelReason kräver status CANCELLED.",
+  })
+  .refine((d) => !d.reactivate || d.status === undefined, {
+    message: "reactivate kombineras inte med status — målstatus avgörs av kortet.",
+  })
+  .refine((d) => !d.chargeNoShowFee || d.status === "NO_SHOW", {
+    message: "chargeNoShowFee kräver status NO_SHOW.",
   });
 
 // PATCH /api/restaurants/{slug}/bookings/{id} — personalens verktyg i dagvyn:
@@ -59,7 +92,7 @@ export async function PATCH(
 
   const booking = await prisma.booking.findFirst({
     where: { id, restaurantId: restaurant.id },
-    include: { guest: { select: { name: true, email: true } } },
+    include: { guest: { select: { name: true, email: true, phone: true } } },
   });
   if (!booking) {
     return NextResponse.json({ error: "Okänd bokning." }, { status: 404 });
@@ -72,8 +105,37 @@ export async function PATCH(
       { status: 400 },
     );
   }
-  const { tableId, status, guestId, arrivedCount, staffNote, date, time, endTime } =
-    parsed.data;
+  const {
+    tableId,
+    status: requestedStatus,
+    guestId,
+    arrivedCount,
+    staffNote,
+    cancelReason,
+    reactivate,
+    chargeNoShowFee: chargeFee,
+    partySize,
+    guestName,
+    guestPhone,
+    date,
+    time,
+    endTime,
+  } = parsed.data;
+
+  // Återaktivering (§3.5): endast från CANCELLED; kort kvar → CONFIRMED,
+  // annars PENDING (kortlänken skickas på nytt nedan). Bordet kan ha hunnit
+  // bokas — exclusion-constrainten ger 409 med flytta-först-instruktion.
+  if (reactivate && booking.status !== "CANCELLED") {
+    return NextResponse.json(
+      { error: "Endast avbokade bokningar kan återaktiveras." },
+      { status: 400 },
+    );
+  }
+  const status = reactivate
+    ? booking.cardPspToken
+      ? ("CONFIRMED" as const)
+      : ("PENDING" as const)
+    : requestedStatus;
 
   if (guestId !== undefined) {
     const guest = await prisma.guest.findFirst({
@@ -86,6 +148,7 @@ export async function PATCH(
 
   // Flytt: kapacitet är ett hårt krav (fysiskt), minSeats ignoreras — personalen
   // vet bäst när de möblerar om. Tidskrockar stoppas av bookings_no_overlap.
+  const effectiveParty = partySize ?? booking.partySize;
   if (tableId !== undefined) {
     const table = await prisma.diningTable.findFirst({
       where: { id: tableId, restaurantId: restaurant.id },
@@ -93,13 +156,58 @@ export async function PATCH(
     if (!table) {
       return NextResponse.json({ error: "Okänt bord." }, { status: 404 });
     }
-    if (table.capacity < booking.partySize) {
+    if (table.capacity < effectiveParty) {
       return NextResponse.json(
         {
-          error: `${table.name} rymmer bara ${table.capacity} — sällskapet är ${booking.partySize}.`,
+          error: `${table.name} rymmer bara ${table.capacity} — sällskapet är ${effectiveParty}.`,
         },
         { status: 400 },
       );
+    }
+  } else if (partySize !== undefined && booking.tableId) {
+    // Antalet växer: nuvarande bord måste rymma sällskapet (§3.10)
+    const current = await prisma.diningTable.findUnique({
+      where: { id: booking.tableId },
+    });
+    if (current && current.capacity < partySize) {
+      return NextResponse.json(
+        {
+          error: `${current.name} rymmer bara ${current.capacity} — flytta bokningen till ett större bord först.`,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  // Gästuppgifter (§3.10): namn/telefon skrivs på kundkortet — delad Guest-rad,
+  // ändringen slår igenom på gästens alla bokningar (det ÄR kundkortet).
+  if (guestName !== undefined || guestPhone !== undefined) {
+    try {
+      await prisma.guest.update({
+        where: { id: booking.guestId },
+        data: {
+          ...(guestName !== undefined ? { name: guestName.trim() } : {}),
+          ...(guestPhone !== undefined
+            ? { phone: guestPhone?.trim() || null }
+            : {}),
+        },
+      });
+    } catch (e) {
+      if (
+        e &&
+        typeof e === "object" &&
+        "code" in e &&
+        (e as { code?: string }).code === "P2002"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Telefonnumret används redan av en annan kund — koppla bokningen till den kunden istället.",
+          },
+          { status: 409 },
+        );
+      }
+      throw e;
     }
   }
 
@@ -117,11 +225,42 @@ export async function PATCH(
 
   const completing = status === "COMPLETED" && booking.status !== "COMPLETED";
 
+  // No-show med debitering (§3.4): beloppet = noShowFeePerGuest × partySize,
+  // beräknat här — aldrig från klienten. Misslyckad debitering lämnar
+  // statusen orörd (502) så personalen kan försöka igen eller markera utan
+  // avgift.
+  let chargedAmount: number | null = null;
+  let chargeRef: string | null = null;
+  if (status === "NO_SHOW" && chargeFee) {
+    if (!booking.cardPspToken) {
+      return NextResponse.json(
+        { error: "Inget kort är registrerat på bokningen — avgiften kan inte debiteras." },
+        { status: 400 },
+      );
+    }
+    const config = parseRestaurantConfig(restaurant.config);
+    const amount = config.noShowFeePerGuest * booking.partySize;
+    const charge = await chargeNoShowFee(
+      booking.cardPspToken,
+      amount,
+      booking.id,
+    );
+    if (!charge.ok) {
+      return NextResponse.json(
+        { error: `Debiteringen misslyckades: ${charge.error}` },
+        { status: 502 },
+      );
+    }
+    chargedAmount = amount;
+    chargeRef = charge.chargeId;
+  }
+
   try {
     const data = {
       ...(tableId !== undefined ? { tableId } : {}),
       ...(status !== undefined ? { status } : {}),
       ...(guestId !== undefined ? { guestId } : {}),
+      ...(partySize !== undefined ? { partySize } : {}),
       ...(newTimes ? { startsAt: newTimes.startsAt, endsAt: newTimes.endsAt } : {}),
       ...(staffNote !== undefined ? { staffNote: staffNote?.trim() || null } : {}),
       // Incheckning: stämpla tid + default anlända = bokat antal (justerbart)
@@ -133,9 +272,24 @@ export async function PATCH(
         : arrivedCount !== undefined
           ? { arrivedCount }
           : {}),
-      // GDPR-gallring: allergiuppgiften raderas när besöket är genomfört
-      // (samtyckesloggen behålls som bevis)
-      ...(completing ? { allergyNote: null } : {}),
+      // GDPR-gallring: allergiuppgift + kortreferens raderas när besöket är
+      // genomfört (samtyckesloggen behålls som bevis; kortet släpps nedan)
+      ...(completing
+        ? { allergyNote: null, cardPspToken: null, cardLast4: null }
+        : {}),
+      ...(chargedAmount !== null ? { charged: chargedAmount } : {}),
+      // Avbokning: vem/varför/när (§1). Kortet behålls i 7 dagar för
+      // återaktivering (§3.5) — gallringscronen städar.
+      ...(status === "CANCELLED" && booking.status !== "CANCELLED"
+        ? {
+            cancelInfo: {
+              av: "personal",
+              ...(cancelReason?.trim() ? { orsak: cancelReason.trim() } : {}),
+              tidpunkt: new Date().toISOString(),
+            },
+          }
+        : {}),
+      ...(reactivate ? { cancelInfo: Prisma.DbNull } : {}),
     };
 
     const updated = completing
@@ -163,38 +317,93 @@ export async function PATCH(
           include: { table: { select: { name: true } } },
         });
 
-    // Bekräftelsemejl vid Bekräfta (PENDING → CONFIRMED) — best-effort,
-    // skickas bara en gång per bokning
+    if (completing && booking.cardPspToken) {
+      await releaseCard(booking.cardPspToken); // best-effort, kastar aldrig
+    }
+    if (chargedAmount !== null) {
+      await logCommunication(booking.id, "FEE_CHARGED", null, {
+        belopp: chargedAmount,
+        chargeId: chargeRef,
+      });
+    }
+
+    // Återaktivering till PENDING: gästen behöver kortlänken på nytt
+    if (reactivate && status === "PENDING") {
+      const sent = await sendCardLink(booking.id, request.nextUrl.origin, {
+        includeSms: true,
+      });
+      if (!sent.ok) {
+        console.error(`Kortlänken gick inte att skicka: ${sent.error}`);
+      }
+    }
+
+    // Gästnotiser (§2 p.6): bekräftelse (engångs), ändringsnotis vid
+    // tidsflytt, avbokningsbekräftelse — alla via mallmodulen med
+    // hanteringslänk + policyfot, loggade i CommunicationLog.
+    const config = parseRestaurantConfig(restaurant.config);
+    const mailData = {
+      restaurantName: restaurant.name,
+      guestName: booking.guest.name,
+      whenText: formatBookingWhen(updated.startsAt, config.timezone),
+      partySize: updated.partySize,
+      tableName: updated.table?.name ?? null,
+      manageUrl: buildManageUrl(
+        appBaseUrl(request.nextUrl.origin),
+        booking.id,
+        updated.endsAt,
+      ),
+      policy: {
+        cancellationWindowHours: config.cancellationWindowHours,
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      },
+    };
+
+    const smsFrom = config.voiceAgent.phoneNumber || undefined;
     if (
       status === "CONFIRMED" &&
       booking.status === "PENDING" &&
-      booking.guest.email &&
       !booking.confirmationSentAt
     ) {
-      try {
-        const config = parseRestaurantConfig(restaurant.config);
-        const local = new Intl.DateTimeFormat("sv-SE", {
-          timeZone: config.timezone,
-          dateStyle: "short",
-          timeStyle: "short",
-        }).format(updated.startsAt);
-        const sent = await sendEmail({
-          to: booking.guest.email,
-          subject: `Bokningsbekräftelse — ${restaurant.name}`,
-          text:
-            `Hej${booking.guest.name ? ` ${booking.guest.name}` : ""}!\n\n` +
-            `Din bokning för ${updated.partySize} ${updated.partySize === 1 ? "person" : "personer"} ` +
-            `${local} är bekräftad.\n\nVälkommen!\n${restaurant.name}`,
+      const { emailOk } = await notifyGuest({
+        bookingId: booking.id,
+        guest: booking.guest,
+        type: "CONFIRMATION",
+        email: bekraftelseMail(mailData),
+        sms: bekraftelseSms(mailData),
+        smsFrom,
+      });
+      if (emailOk) {
+        await prisma.booking.update({
+          where: { id: booking.id },
+          data: { confirmationSentAt: new Date() },
         });
-        if (sent.ok) {
-          await prisma.booking.update({
-            where: { id: booking.id },
-            data: { confirmationSentAt: new Date() },
-          });
-        }
-      } catch (e) {
-        console.error("Kunde inte skicka bokningsbekräftelse:", e);
       }
+    }
+
+    // Tidsflytt/antalsändring är gästpåverkande — bordbyte/anteckningar inte
+    const partyChanged =
+      partySize !== undefined && partySize !== booking.partySize;
+    if ((newTimes || partyChanged) && status !== "CANCELLED") {
+      await notifyGuest({
+        bookingId: booking.id,
+        guest: booking.guest,
+        type: "CHANGE",
+        email: andringsnotisMail(mailData),
+        sms: andringSms(mailData),
+        smsFrom,
+      });
+    }
+
+    if (status === "CANCELLED" && booking.status !== "CANCELLED") {
+      await notifyGuest({
+        bookingId: booking.id,
+        guest: booking.guest,
+        type: "CANCELLATION_CONFIRMATION",
+        email: avbokningsbekraftelseMail(mailData),
+        sms: avbokningSms(mailData),
+        smsFrom,
+      });
     }
 
     return NextResponse.json({
@@ -211,9 +420,11 @@ export async function PATCH(
     if (isOverlapViolation(e)) {
       return NextResponse.json(
         {
-          error: newTimes
-            ? "Bordet är upptaget den tiden — välj en annan tid eller flytta bordet först."
-            : "Bordet är upptaget den tiden — välj ett annat bord.",
+          error: reactivate
+            ? "Bordet har hunnit bokas — flytta bokningen till en annan tid eller ett annat bord först."
+            : newTimes
+              ? "Bordet är upptaget den tiden — välj en annan tid eller flytta bordet först."
+              : "Bordet är upptaget den tiden — välj ett annat bord.",
         },
         { status: 409 },
       );

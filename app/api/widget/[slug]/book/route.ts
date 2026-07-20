@@ -6,9 +6,18 @@ import { createBooking } from "@/lib/booking/availability";
 import { guestBookingBlocked } from "@/lib/booking/rules";
 import { findOrCreateGuest } from "@/lib/booking/guests";
 import { ALLERGY_CONSENT_TEXT } from "@/lib/booking/consent";
-import { sendEmail } from "@/lib/messaging/send";
+import { registerCard } from "@/lib/payments/psp";
+import { getUser } from "@/lib/auth/server";
 import { embed } from "@/lib/ai/embeddings";
 import { setInteractionEmbedding } from "@/lib/db/vector";
+import { notifyGuest, logCommunication } from "@/lib/messaging/notify";
+import {
+  bekraftelseMail,
+  bekraftelseSms,
+  formatBookingWhen,
+} from "@/lib/messaging/templates";
+import { buildManageUrl } from "@/lib/booking/manage-token";
+import { appBaseUrl } from "@/lib/urls";
 
 const bookRequestSchema = z
   .object({
@@ -23,6 +32,19 @@ const bookRequestSchema = z
     /** Hälsouppgift (GDPR art 9) — lagras i Booking.allergyNote, gallras vid COMPLETED */
     allergies: z.string().max(300).optional(),
     allergyConsent: z.boolean().optional(),
+    /**
+     * Kortgaranti (§3.1): krävs när restaurangen har cardGuaranteeRequired.
+     * Fälten går direkt till PSP-stubben och persisteras ALDRIG — endast
+     * token + last4 sparas (PCI DSS).
+     */
+    card: z
+      .object({
+        number: z.string().min(12).max(30),
+        expMonth: z.number().int().min(1).max(12),
+        expYear: z.number().int().min(0).max(2100),
+        cvc: z.string().regex(/^\d{3,4}$/),
+      })
+      .optional(),
   })
   .refine((d) => d.email || d.phone, {
     message: "Ange e-post eller telefonnummer",
@@ -80,7 +102,37 @@ export async function POST(
     );
   }
 
+  // Kortgarantin (§2 p.2): kortet registreras som garanti — inget dras nu.
+  // Av per restaurang (§2b p.4): utan kravet bokas gästen bekräftat direkt.
+  let card: { pspToken: string; last4: string } | null = null;
+  if (config.cardGuaranteeRequired) {
+    if (!body.card) {
+      return NextResponse.json(
+        { error: "Kortgaranti krävs för onlinebokning — ange kortuppgifter." },
+        { status: 400 },
+      );
+    }
+    const registered = await registerCard(body.card);
+    if (!registered.ok) {
+      return NextResponse.json({ error: registered.error }, { status: 400 });
+    }
+    card = { pspToken: registered.pspToken, last4: registered.last4 };
+  }
+
   const { guest } = await findOrCreateGuest(restaurant.id, body);
+
+  // Matgäst-konto: inloggad gäst (kind: "guest") kopplas till kundkortet
+  const sessionUser = await getUser();
+  if (
+    sessionUser &&
+    (sessionUser.user_metadata as { kind?: string } | undefined)?.kind ===
+      "guest"
+  ) {
+    await prisma.guest.updateMany({
+      where: { id: guest.id, authUserId: null },
+      data: { authUserId: sessionUser.id },
+    });
+  }
 
   const result = await createBooking(
     restaurant.id,
@@ -97,7 +149,7 @@ export async function POST(
   }
 
   const allergies = body.allergies?.trim();
-  if (body.childrenCount > 0 || allergies) {
+  if (body.childrenCount > 0 || allergies || card) {
     await prisma.booking.update({
       where: { id: result.bookingId },
       data: {
@@ -109,32 +161,56 @@ export async function POST(
               allergyConsentText: ALLERGY_CONSENT_TEXT,
             }
           : {}),
+        ...(card
+          ? { cardPspToken: card.pspToken, cardLast4: card.last4 }
+          : {}),
       },
     });
   }
 
-  // Bekräftelsemejl — transaktionsutskick, kräver inget marknadsföringssamtycke.
+  // Kommunikationslogg: bokningen mottagen (tidslinjen i bokningsdetaljen)
+  await logCommunication(result.bookingId, "RECEIVED", null, {
+    kalla: "widget",
+  });
+
+  // Bekräftelsemejl (mall 1, §3.7) med hanteringslänk + policyfot —
+  // transaktionsutskick, kräver inget marknadsföringssamtycke.
   // Best-effort: ett mejlfel får aldrig fälla bokningen.
   const guestEmail = body.email ?? guest.email;
   if (guestEmail) {
-    try {
-      const sent = await sendEmail({
-        to: guestEmail,
-        subject: `Bokningsbekräftelse — ${restaurant.name}`,
-        text:
-          `Hej${body.name ? ` ${body.name}` : ""}!\n\n` +
-          `Din bokning för ${body.partySize} ${body.partySize === 1 ? "person" : "personer"} ` +
-          `den ${body.date} kl ${body.time} är bekräftad (bord ${result.tableName}).\n\n` +
-          `Välkommen!\n${restaurant.name}`,
+    const endsAt = new Date(
+      result.startsAt.getTime() + config.bookingDurationMinutes * 60_000,
+    );
+    const mailData = {
+      restaurantName: restaurant.name,
+      guestName: body.name ?? guest.name,
+      whenText: formatBookingWhen(result.startsAt, config.timezone),
+      partySize: body.partySize,
+      tableName: result.tableName,
+      manageUrl: buildManageUrl(
+        appBaseUrl(request.nextUrl.origin),
+        result.bookingId,
+        endsAt,
+      ),
+      policy: {
+        cancellationWindowHours: config.cancellationWindowHours,
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      },
+    };
+    const { emailOk } = await notifyGuest({
+      bookingId: result.bookingId,
+      guest: { email: guestEmail, phone: body.phone ?? guest.phone },
+      type: "CONFIRMATION",
+      email: bekraftelseMail(mailData),
+      sms: bekraftelseSms(mailData),
+      smsFrom: config.voiceAgent.phoneNumber || undefined,
+    });
+    if (emailOk) {
+      await prisma.booking.update({
+        where: { id: result.bookingId },
+        data: { confirmationSentAt: new Date() },
       });
-      if (sent.ok) {
-        await prisma.booking.update({
-          where: { id: result.bookingId },
-          data: { confirmationSentAt: new Date() },
-        });
-      }
-    } catch (e) {
-      console.error("Kunde inte skicka bokningsbekräftelse:", e);
     }
   }
 
@@ -165,6 +241,9 @@ export async function POST(
     console.error("Kunde inte spara widget-interaktion:", e);
   }
 
+  const manageEndsAt = new Date(
+    result.startsAt.getTime() + config.bookingDurationMinutes * 60_000,
+  );
   return NextResponse.json({
     bookingId: result.bookingId,
     tableName: result.tableName,
@@ -172,5 +251,11 @@ export async function POST(
     time: body.time,
     partySize: body.partySize,
     childrenCount: body.childrenCount,
+    cardLast4: card?.last4 ?? null,
+    manageUrl: buildManageUrl(
+      appBaseUrl(request.nextUrl.origin),
+      result.bookingId,
+      manageEndsAt,
+    ),
   });
 }

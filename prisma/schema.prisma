@@ -47,6 +47,27 @@ enum MessageStatus {
   ESCALATED // flaggat för människa
 }
 
+enum WaitlistStatus {
+  WAITING // väntar
+  OFFERED // erbjuden — SMS skickat, först till kvarn
+}
+
+enum CommLogType {
+  RECEIVED // bokning mottagen — systemhändelse utan kanal
+  CARD_LINK // kortlänk skickad
+  CONFIRMATION // bekräftelse
+  REMINDER // påminnelse
+  AUTO_CANCELLATION // auto-avbokning vid utebliven kortbekräftelse
+  FEE_CHARGED // no-show-avgift debiterad — systemhändelse utan kanal
+  CANCELLATION_CONFIRMATION // avbokningsbekräftelse
+  CHANGE // ändringsnotis
+}
+
+enum CommChannel {
+  EMAIL
+  SMS
+}
+
 model Restaurant {
   id        String   @id @default(uuid()) @db.Uuid
   slug      String   @unique
@@ -67,6 +88,7 @@ model Restaurant {
   bookings      Booking[]
   threads       EmailThread[]
   knowledgeDocs KnowledgeDocument[]
+  waitlist      WaitlistEntry[]
 
   @@map("restaurants")
 }
@@ -108,6 +130,8 @@ model Guest {
   email        String?
   phone        String?
   name         String?
+  /// Matgästens Supabase Auth user-id (kind: "guest") — ingen FK, samma skäl som Restaurant.ownerId
+  authUserId   String?    @map("auth_user_id") @db.Uuid
   createdAt    DateTime   @default(now()) @map("created_at")
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
@@ -135,6 +159,8 @@ model GuestProfile {
   /// Opt-in för marknadsföringsutskick (19 § MFL) — transaktionsmejl kräver det inte
   marketingConsent    Boolean   @default(false) @map("marketing_consent")
   marketingConsentAt  DateTime? @map("marketing_consent_at")
+  /// Märkningar: "allergi" | "stamgäst" | "barnfamilj"
+  tags                String[]  @default([])
   updatedAt           DateTime  @updatedAt @map("updated_at")
   guest               Guest     @relation(fields: [guestId], references: [id], onDelete: Cascade)
 
@@ -195,15 +221,60 @@ model Booking {
   allergyConsentText String?   @map("allergy_consent_text")
   confirmationSentAt DateTime? @map("confirmation_sent_at")
   reminderSentAt     DateTime? @map("reminder_sent_at")
+  /// PSP-token för kortgarantin — ALDRIG kortnummer (PCI DSS). Gallras enligt reglerna i jobs/gallring.
+  cardPspToken String?       @map("card_psp_token")
+  cardLast4    String?       @map("card_last4")
+  /// Debiterad no-show-avgift i kr (noShowFeePerGuest × partySize vid debiteringstillfället)
+  charged      Decimal?      @db.Decimal(10, 2)
+  /// { av: "personal" | "gäst" | "auto", orsak?: string, tidpunkt: ISO-8601 }
+  cancelInfo   Json?         @map("cancel_info")
   createdBy    String        @default("concierge") @map("created_by") // "concierge" | "human"
   createdAt    DateTime      @default(now()) @map("created_at")
   restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   guest        Guest         @relation(fields: [guestId], references: [id])
   table        DiningTable?  @relation(fields: [tableId], references: [id])
+  commLogs     CommunicationLog[]
 
   @@index([restaurantId, startsAt])
   @@index([tableId, startsAt])
   @@map("bookings")
+}
+
+/// Väntelistan (§3.8). Tider i restaurangens LOKALA tid som strängar —
+/// matchning sker med zero-paddad strängjämförelse mot Intl-formatterad lokaltid.
+model WaitlistEntry {
+  id           String         @id @default(uuid()) @db.Uuid
+  restaurantId String         @map("restaurant_id") @db.Uuid
+  name         String
+  phone        String
+  partySize    Int            @map("party_size")
+  date         String // "YYYY-MM-DD" (lokal dag)
+  wishedFrom   String         @map("wished_from") // "HH:MM"
+  wishedTo     String         @map("wished_to") // "HH:MM"
+  status       WaitlistStatus @default(WAITING)
+  offeredTime  String?        @map("offered_time") // "HH:MM" som erbjöds
+  offeredAt    DateTime?      @map("offered_at")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, date, status])
+  @@map("waitlist_entries")
+}
+
+/// Kommunikationslogg per bokning (§1) — driver tidslinjen "Kommunikation".
+/// Rad skrivs endast när ett utskick faktiskt gått ut (eller vid systemhändelse, channel null).
+model CommunicationLog {
+  id        String       @id @default(uuid()) @db.Uuid
+  bookingId String       @map("booking_id") @db.Uuid
+  type      CommLogType
+  channel   CommChannel? // null = systemhändelse (RECEIVED, FEE_CHARGED)
+  /// T.ex. { belopp, chargeId } för FEE_CHARGED; { till } för utskick
+  meta      Json?
+  sentAt    DateTime     @default(now()) @map("sent_at")
+  booking   Booking      @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, sentAt])
+  @@map("communication_logs")
 }
 
 model EmailThread {

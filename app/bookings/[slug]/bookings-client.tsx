@@ -14,6 +14,17 @@ import {
   toShape,
   type Shape,
 } from "@/lib/floor-plan";
+import type { Booking, PolicyConfig, WaitlistEntry } from "./booking-types";
+import { WaitlistCard } from "./waitlist-card";
+import {
+  PendingCardPanel,
+  ChargedPanel,
+  CancelledPanel,
+} from "./booking-panels";
+import { NoShowModal } from "./noshow-modal";
+import { CancelDialog } from "./cancel-dialog";
+import { CommTimeline } from "./comm-timeline";
+import { MailPreviewModal } from "./mail-preview-modal";
 
 // BLA-31: den operativa dagvyn. Bordskartan (read-only-layout) visar dagens
 // bokningar vid vald tidpunkt, uppdateras i realtid via Supabase postgres_changes,
@@ -42,24 +53,6 @@ type TableRow = {
   posX: number;
   posY: number;
 };
-type Booking = {
-  id: string;
-  tableId: string | null;
-  guestId: string | null;
-  startsAt: string;
-  endsAt: string;
-  partySize: number;
-  childrenCount: number;
-  status: string;
-  seatedAt: string | null;
-  createdAt: string;
-  createdBy: string;
-  notes: string | null;
-  arrivedCount: number | null;
-  staffNote: string | null;
-  allergyNote: string | null;
-  guestName: string;
-};
 type DayData = {
   restaurantId: string;
   rooms: Room[];
@@ -74,13 +67,16 @@ type Props = {
   restaurantId: string;
   restaurantName: string;
   openingHours: Record<string, DayHoursRange[]>;
+  policy: PolicyConfig;
 };
 
 const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
 const STATUS_META: Record<string, { label: string; classes: string }> = {
   PENDING: {
-    label: "Väntar",
+    // Preliminär (§3.3): väntar på kortbekräftelse — samma status bär även
+    // AI-mejlbokningar som väntar på personal
+    label: "Preliminär",
     classes:
       "border-status-pending-border bg-status-pending-bg text-status-pending-fg",
   },
@@ -134,6 +130,7 @@ export function BookingsClient({
   restaurantId,
   restaurantName,
   openingHours,
+  policy,
 }: Props) {
   const [date, setDate] = useState(() => todayLocal());
   const [data, setData] = useState<DayData | null>(null);
@@ -143,6 +140,7 @@ export function BookingsClient({
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [live, setLive] = useState(false);
+  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
   const dateRef = useRef(date);
   useEffect(() => {
     dateRef.current = date;
@@ -176,6 +174,25 @@ export function BookingsClient({
     const id = setTimeout(() => void fetchDay(date), 0);
     return () => clearTimeout(id);
   }, [date, fetchDay]);
+
+  // Väntelistan (§3.8): separat hämtning — dagvyns realtime driver den inte
+  const fetchWaitlist = useCallback(
+    async (d: string) => {
+      try {
+        const res = await fetch(`/api/restaurants/${slug}/waitlist?date=${d}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setWaitlist(data.waitlist ?? []);
+      } catch {
+        /* kortet döljs vid tom lista — inget fel att visa */
+      }
+    },
+    [slug],
+  );
+  useEffect(() => {
+    const id = setTimeout(() => void fetchWaitlist(date), 0);
+    return () => clearTimeout(id);
+  }, [date, fetchWaitlist]);
 
   // --- Supabase Realtime: bookings-ändringar för denna restaurang ---
   useEffect(() => {
@@ -279,6 +296,8 @@ export function BookingsClient({
         date?: string;
         time?: string;
         endTime?: string;
+        reactivate?: boolean;
+        chargeNoShowFee?: boolean;
       },
     ) => {
       setError(null);
@@ -314,8 +333,14 @@ export function BookingsClient({
     data?.bookings.find((b) => b.id === modalBookingId) ?? null;
   const [dropInOpen, setDropInOpen] = useState(false);
   const [newBookingOpen, setNewBookingOpen] = useState(false);
-  // Tvåstegs-avboka: kortet vars avbokning väntar på "Ja, avboka"/"Ångra"
-  const [cancelArmedId, setCancelArmedId] = useState<string | null>(null);
+  // "Ändra bokning" (§3.10): NewBookingModal i edit-läge
+  const [editBookingId, setEditBookingId] = useState<string | null>(null);
+  // No-show- och avbokningsdialogerna (§3.4, §3.5) — id-baserade så en
+  // realtime-refetch aldrig klipper pågående dialog
+  const [noShowForId, setNoShowForId] = useState<string | null>(null);
+  const [cancelForId, setCancelForId] = useState<string | null>(null);
+  const [mailForId, setMailForId] = useState<string | null>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
   const [attachBookingId, setAttachBookingId] = useState<string | null>(null);
   const [listDrag, setListDrag] = useState<{
     bookingId: string;
@@ -596,7 +621,7 @@ export function BookingsClient({
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="h-2.5 w-2.5 rounded-full bg-status-pending-dot" />
-                  Väntar
+                  Preliminär
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="h-2.5 w-2.5 rounded-full bg-status-booked-dot" />
@@ -724,8 +749,28 @@ export function BookingsClient({
             </p>
           </div>
 
-          {/* Höger: dagens bokningslista */}
+          {/* Höger: väntelistan (§3.8) + dagens bokningslista */}
           <aside>
+            <WaitlistCard
+              entries={waitlist}
+              onOffer={async (id) => {
+                const entry = waitlist.find((w) => w.id === id);
+                await fetch(`/api/restaurants/${slug}/waitlist/${id}/offer`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    time: entry?.wishedFrom ?? "18:00",
+                  }),
+                }).catch(() => {});
+                await fetchWaitlist(dateRef.current);
+              }}
+              onRemove={async (id) => {
+                await fetch(`/api/restaurants/${slug}/waitlist/${id}`, {
+                  method: "DELETE",
+                }).catch(() => {});
+                await fetchWaitlist(dateRef.current);
+              }}
+            />
             <h2 className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
               Dagens bokningar ({(data?.bookings ?? []).length})
             </h2>
@@ -744,7 +789,6 @@ export function BookingsClient({
                   minutesSinceStart(b, now) > 0;
                 const sinceStart = minutesSinceStart(b, now);
                 const draggable = OCCUPYING.has(b.status) && b.tableId;
-                const cancelArmed = cancelArmedId === b.id;
                 return (
                   <div
                     key={b.id}
@@ -756,7 +800,7 @@ export function BookingsClient({
                       selectedBookingId === b.id
                         ? "border-[var(--w-accent)] bg-[var(--w-accent)]/5"
                         : "border-[var(--w-line)] bg-[var(--w-panel)] hover:border-[var(--w-muted)]"
-                    }`}
+                    } ${b.status === "CANCELLED" ? "opacity-60" : ""}`}
                   >
                     <div className="flex items-start gap-3">
                       <div className="flex shrink-0 flex-col items-center gap-1">
@@ -831,98 +875,68 @@ export function BookingsClient({
                             </span>
                           )}
                         </div>
-                        {/* Åtgärdsrad — 44 pt träffytor (iPad under service) */}
-                        {cancelArmed ? (
-                          <div
-                            className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-status-late-border bg-status-late-bg px-3 py-2"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <span className="text-xs font-medium text-status-late-fg">
-                              Avboka bokningen?
-                            </span>
-                            <span className="ml-auto flex gap-2">
-                              <button
-                                onClick={() => {
-                                  setCancelArmedId(null);
-                                  void patchBooking(b.id, {
-                                    status: "CANCELLED",
-                                  });
-                                }}
-                                className="min-h-11 rounded-lg bg-[#b5503f] px-3 text-xs font-semibold text-white hover:brightness-110 transition"
-                              >
-                                Ja, avboka
-                              </button>
-                              <button
-                                onClick={() => setCancelArmedId(null)}
-                                className="min-h-11 rounded-lg border border-[var(--w-line)] px-3 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
-                              >
-                                Ångra
-                              </button>
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="mt-1.5 flex flex-wrap justify-end gap-1.5">
-                            {b.status === "PENDING" && (
+                        {/* Åtgärdsrad — 44 pt träffytor (iPad under service).
+                            No-show och Avboka går ALLTID via dialogerna
+                            (§3.4/§3.5) — debitering resp. väntelistematch. */}
+                        <div className="mt-1.5 flex flex-wrap justify-end gap-1.5">
+                          {b.status === "PENDING" && (
+                            <ActionButton
+                              label="Bekräfta"
+                              tone="green"
+                              onClick={() => {
+                                focusBooking(b);
+                                void patchBooking(b.id, {
+                                  status: "CONFIRMED",
+                                });
+                              }}
+                            />
+                          )}
+                          {(b.status === "PENDING" ||
+                            b.status === "CONFIRMED") && (
+                            <>
                               <ActionButton
-                                label="Bekräfta"
+                                label="Anlänt"
                                 tone="green"
                                 onClick={() => {
                                   focusBooking(b);
                                   void patchBooking(b.id, {
-                                    status: "CONFIRMED",
+                                    status: "SEATED",
                                   });
                                 }}
                               />
-                            )}
-                            {(b.status === "PENDING" ||
-                              b.status === "CONFIRMED") && (
-                              <>
+                              {late && (
                                 <ActionButton
-                                  label="Anlänt"
-                                  tone="green"
+                                  label="No-show…"
+                                  tone="red"
                                   onClick={() => {
                                     focusBooking(b);
-                                    void patchBooking(b.id, {
-                                      status: "SEATED",
-                                    });
+                                    setNoShowForId(b.id);
                                   }}
                                 />
-                                {late && (
-                                  <ActionButton
-                                    label="Släpp bordet"
-                                    tone="red"
-                                    onClick={() => {
-                                      focusBooking(b);
-                                      void patchBooking(b.id, {
-                                        status: "NO_SHOW",
-                                      });
-                                    }}
-                                  />
-                                )}
-                                <ActionButton
-                                  label="Avboka…"
-                                  tone="neutral"
-                                  onClick={() => {
-                                    focusBooking(b);
-                                    setCancelArmedId(b.id);
-                                  }}
-                                />
-                              </>
-                            )}
-                            {b.status === "SEATED" && (
+                              )}
                               <ActionButton
-                                label="Avsluta"
+                                label="Avboka…"
                                 tone="neutral"
                                 onClick={() => {
                                   focusBooking(b);
-                                  void patchBooking(b.id, {
-                                    status: "COMPLETED",
-                                  });
+                                  setCancelForId(b.id);
                                 }}
                               />
-                            )}
-                          </div>
-                        )}
+                            </>
+                          )}
+                          {b.status === "SEATED" && (
+                            <ActionButton
+                              label="Avsluta"
+                              tone="neutral"
+                              onClick={() => {
+                                focusBooking(b);
+                                void patchBooking(b.id, {
+                                  status: "COMPLETED",
+                                });
+                              }}
+                            />
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -943,10 +957,131 @@ export function BookingsClient({
             data?.tables.find((t) => t.id === modalBooking.tableId)?.name ?? "Bord"
           }
           now={now}
+          slug={slug}
+          policy={policy}
           patchBooking={patchBooking}
+          onNoShow={() => setNoShowForId(modalBooking.id)}
+          onCancel={() => setCancelForId(modalBooking.id)}
+          onPreviewMail={() => setMailForId(modalBooking.id)}
+          onEdit={() => setEditBookingId(modalBooking.id)}
           onClose={() => setModalBookingId(null)}
         />
       )}
+
+      {/* Ändra bokning (§3.10): namn, telefon, antal, tid, bord */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === editBookingId);
+        if (!b || !data) return null;
+        return (
+          <NewBookingModal
+            slug={slug}
+            date={date}
+            timeSlots={timeSlots}
+            tables={data.tables}
+            rooms={data.rooms}
+            existing={b}
+            patchBooking={patchBooking}
+            onClose={() => setEditBookingId(null)}
+            onCreated={() => {
+              setEditBookingId(null);
+              void fetchDay(dateRef.current);
+            }}
+          />
+        );
+      })()}
+
+      {/* "Visa utskick" (§3.7) — över bokningsmodalen */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === mailForId);
+        if (!b) return null;
+        return (
+          <MailPreviewModal
+            slug={slug}
+            booking={b}
+            onClose={() => setMailForId(null)}
+          />
+        );
+      })()}
+
+      {/* No-show-dialogen (§3.4): med/utan kort, debitering via PSP-stubben */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === noShowForId);
+        if (!b) return null;
+        return (
+          <NoShowModal
+            booking={b}
+            policy={policy}
+            busy={dialogBusy}
+            onCharge={() => {
+              setDialogBusy(true);
+              void patchBooking(b.id, {
+                status: "NO_SHOW",
+                chargeNoShowFee: true,
+              }).finally(() => {
+                setDialogBusy(false);
+                setNoShowForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onNoCharge={() => {
+              setDialogBusy(true);
+              void patchBooking(b.id, { status: "NO_SHOW" }).finally(() => {
+                setDialogBusy(false);
+                setNoShowForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onClose={() => setNoShowForId(null)}
+          />
+        );
+      })()}
+
+      {/* Avbokningsdialogen (§3.5): policyrad + väntelistematch */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === cancelForId);
+        if (!b) return null;
+        return (
+          <CancelDialog
+            slug={slug}
+            booking={b}
+            policy={policy}
+            busy={dialogBusy}
+            onCancel={() => {
+              setDialogBusy(true);
+              void patchBooking(b.id, { status: "CANCELLED" }).finally(() => {
+                setDialogBusy(false);
+                setCancelForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onCancelAndOffer={(entryId, offeredTime) => {
+              setDialogBusy(true);
+              void (async () => {
+                const ok = await patchBooking(b.id, { status: "CANCELLED" });
+                if (ok) {
+                  // Erbjudandet är en separat personalhandling — faller det
+                  // ligger posten kvar som Väntar (ofarligt)
+                  await fetch(
+                    `/api/restaurants/${slug}/waitlist/${entryId}/offer`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ time: offeredTime }),
+                    },
+                  ).catch(() => {});
+                  await fetchDay(dateRef.current);
+                  await fetchWaitlist(dateRef.current);
+                }
+              })().finally(() => {
+                setDialogBusy(false);
+                setCancelForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onClose={() => setCancelForId(null)}
+          />
+        );
+      })()}
 
       {/* Ny bokning: namn + telefon för ny gäst inline */}
       {newBookingOpen && data && (
@@ -1017,13 +1152,21 @@ function BookingModal({
   date,
   tableName,
   now,
+  slug,
+  policy,
   patchBooking,
+  onNoShow,
+  onCancel,
+  onPreviewMail,
+  onEdit,
   onClose,
 }: {
   booking: Booking;
   date: string;
   tableName: string;
   now: number;
+  slug: string;
+  policy: PolicyConfig;
   patchBooking: (
     id: string,
     body: {
@@ -1033,8 +1176,13 @@ function BookingModal({
       date?: string;
       time?: string;
       endTime?: string;
+      reactivate?: boolean;
     },
   ) => Promise<boolean>;
+  onNoShow: () => void;
+  onCancel: () => void;
+  onPreviewMail: () => void;
+  onEdit: () => void;
   onClose: () => void;
 }) {
   const clock = (iso: string) =>
@@ -1055,7 +1203,6 @@ function BookingModal({
   const [arrived, setArrived] = useState(
     booking.arrivedCount ?? booking.partySize,
   );
-  const [cancelArmed, setCancelArmed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const seatedMinutes = booking.seatedAt
@@ -1183,6 +1330,12 @@ function BookingModal({
             <dt className="text-[var(--w-muted)]">Bokningen gjordes</dt>
             <dd>{dateTime(booking.createdAt)}</dd>
           </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-[var(--w-muted)]">Kort</dt>
+            <dd className="font-mono">
+              {booking.cardLast4 ? `•••• ${booking.cardLast4}` : "Saknas"}
+            </dd>
+          </div>
           {booking.notes && (
             <div className="flex justify-between gap-4">
               <dt className="text-[var(--w-muted)]">Önskemål</dt>
@@ -1198,6 +1351,26 @@ function BookingModal({
             </div>
           )}
         </dl>
+
+        {/* Statuspaneler: gul (väntar på kort), röd (avgift debiterad),
+            grå (avbokad + återaktivering) — POC:ns paneler (§3.3–3.5) */}
+        {booking.status === "PENDING" && (
+          <PendingCardPanel booking={booking} policy={policy} slug={slug} />
+        )}
+        <ChargedPanel booking={booking} />
+        {booking.status === "CANCELLED" && (
+          <CancelledPanel
+            booking={booking}
+            policy={policy}
+            busy={busy}
+            onReactivate={() => {
+              setBusy(true);
+              void patchBooking(booking.id, { reactivate: true }).finally(() =>
+                setBusy(false),
+              );
+            }}
+          />
+        )}
 
         {/* Antal anlända — kan skilja sig från bokat antal */}
         {active && (
@@ -1247,6 +1420,13 @@ function BookingModal({
           />
         </div>
 
+        {/* Tidslinjen Kommunikation + "Visa utskick" (§1, §3.7) */}
+        <CommTimeline
+          booking={booking}
+          policy={policy}
+          onPreviewMail={onPreviewMail}
+        />
+
         {/* Åtgärder */}
         <div className="mt-5 space-y-2">
           {booking.status === "PENDING" && (
@@ -1255,7 +1435,9 @@ function BookingModal({
               disabled={busy}
               className="min-h-11 w-full rounded-xl border border-status-seated-border bg-status-seated-bg text-sm font-semibold text-status-seated-fg hover:brightness-110 disabled:opacity-60 transition"
             >
-              Bekräfta bokningen
+              {policy.cardGuaranteeRequired && !booking.cardLast4
+                ? "Bekräfta utan kort"
+                : "Bekräfta bokningen"}
             </button>
           )}
           {(booking.status === "PENDING" || booking.status === "CONFIRMED") && (
@@ -1276,36 +1458,30 @@ function BookingModal({
               Avsluta besöket
             </button>
           )}
-          {active &&
-            (cancelArmed ? (
-              <div className="flex items-center gap-2 rounded-xl border border-status-late-border bg-status-late-bg px-3 py-2">
-                <span className="text-xs font-medium text-status-late-fg">
-                  Avboka bokningen?
-                </span>
-                <span className="ml-auto flex gap-2">
-                  <button
-                    onClick={() => void setStatus("CANCELLED")}
-                    disabled={busy}
-                    className="min-h-11 rounded-lg bg-[#b5503f] px-3 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60 transition"
-                  >
-                    Ja, avboka
-                  </button>
-                  <button
-                    onClick={() => setCancelArmed(false)}
-                    className="min-h-11 rounded-lg border border-[var(--w-line)] px-3 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
-                  >
-                    Ångra
-                  </button>
-                </span>
-              </div>
-            ) : (
+          {(booking.status === "PENDING" || booking.status === "CONFIRMED") && (
+            <>
               <button
-                onClick={() => setCancelArmed(true)}
-                className="min-h-11 w-full rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
+                onClick={onEdit}
+                className="min-h-11 w-full rounded-xl border border-[var(--w-line)] text-sm font-medium text-[var(--w-ink)] hover:border-[var(--w-muted)] transition"
               >
-                Avboka…
+                Ändra bokning
               </button>
-            ))}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={onNoShow}
+                  className="min-h-11 rounded-xl border border-status-late-border text-sm font-medium text-status-late-fg hover:bg-status-late-bg transition"
+                >
+                  No-show…
+                </button>
+                <button
+                  onClick={onCancel}
+                  className="min-h-11 rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
+                >
+                  Avboka…
+                </button>
+              </div>
+            </>
+          )}
           <button
             onClick={onClose}
             className="min-h-11 w-full rounded-xl border border-[var(--w-line)] text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
@@ -1324,6 +1500,8 @@ function NewBookingModal({
   timeSlots,
   tables,
   rooms,
+  existing = null,
+  patchBooking,
   onClose,
   onCreated,
 }: {
@@ -1332,24 +1510,84 @@ function NewBookingModal({
   timeSlots: number[];
   tables: TableRow[];
   rooms: Room[];
+  /** Satt = "Ändra bokning" (§3.10): prefyllt, statusväljaren dold, PATCH. */
+  existing?: Booking | null;
+  patchBooking?: (
+    id: string,
+    body: {
+      partySize?: number;
+      guestName?: string;
+      guestPhone?: string | null;
+      tableId?: string;
+      date?: string;
+      time?: string;
+    },
+  ) => Promise<boolean>;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const nowM = new Date().getHours() * 60 + new Date().getMinutes();
   const defaultSlot =
     timeSlots.find((m) => m >= nowM) ?? timeSlots[0] ?? 17 * 60;
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [time, setTime] = useState(formatMinutes(defaultSlot));
-  const [party, setParty] = useState(2);
-  const [tableId, setTableId] = useState<string>(""); // "" = auto
+  const [name, setName] = useState(existing?.guestName ?? "");
+  const [phone, setPhone] = useState(existing?.guestPhone ?? "");
+  const [email, setEmail] = useState(existing?.guestEmail ?? "");
+  const [time, setTime] = useState(() =>
+    existing
+      ? new Date(existing.startsAt).toLocaleTimeString("sv-SE", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : formatMinutes(defaultSlot),
+  );
+  const [party, setParty] = useState(existing?.partySize ?? 2);
+  const [tableId, setTableId] = useState<string>(existing?.tableId ?? ""); // "" = auto
   const [notes, setNotes] = useState("");
+  // Preliminär är default (§3.2): kortlänken mejlas, bokningen bekräftas
+  // automatiskt när gästen angett kort
+  const [status, setStatus] = useState<"PENDING" | "CONFIRMED">("PENDING");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function create() {
+  async function saveEdit() {
+    if (!existing || !patchBooking) return;
     if (!name.trim()) {
       setError("Ange gästens namn.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const currentTime = new Date(existing.startsAt).toLocaleTimeString(
+      "sv-SE",
+      { hour: "2-digit", minute: "2-digit" },
+    );
+    const ok = await patchBooking(existing.id, {
+      ...(name.trim() !== existing.guestName
+        ? { guestName: name.trim() }
+        : {}),
+      ...(phone.trim() !== (existing.guestPhone ?? "")
+        ? { guestPhone: phone.trim() || null }
+        : {}),
+      ...(party !== existing.partySize ? { partySize: party } : {}),
+      ...(time !== currentTime ? { date, time } : {}),
+      ...(tableId && tableId !== existing.tableId ? { tableId } : {}),
+    });
+    setSaving(false);
+    if (ok) onCreated();
+    else setError("Ändringen misslyckades — se felmeddelandet i dagvyn.");
+  }
+
+  async function create() {
+    if (existing) {
+      await saveEdit();
+      return;
+    }
+    if (!name.trim()) {
+      setError("Ange gästens namn.");
+      return;
+    }
+    if (status === "PENDING" && !email.trim()) {
+      setError("Ange gästens e-post — kortlänken mejlas dit.");
       return;
     }
     setSaving(true);
@@ -1366,9 +1604,11 @@ function NewBookingModal({
           guest: {
             name: name.trim(),
             ...(phone.trim() ? { phone: phone.trim() } : {}),
+            ...(email.trim() ? { email: email.trim() } : {}),
           },
           ...(notes.trim() ? { notes: notes.trim() } : {}),
           onSite: false,
+          status,
         }),
       });
       const data = await res.json();
@@ -1400,7 +1640,7 @@ function NewBookingModal({
         className="w-full max-w-md rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
       >
         <h3 className="text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
-          Ny bokning · {date}
+          {existing ? "Ändra bokning" : "Ny bokning"} · {date}
         </h3>
         <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
           <label className="col-span-2">
@@ -1421,6 +1661,24 @@ function NewBookingModal({
               onChange={(e) => setPhone(e.target.value)}
               placeholder="070-123 45 67"
               className={inputClass}
+            />
+          </label>
+          <label className="col-span-2">
+            <span className="text-xs text-[var(--w-muted)]">
+              E-post
+              {existing
+                ? " (ändras på kundkortet)"
+                : status === "PENDING"
+                  ? ""
+                  : " (valfritt)"}
+            </span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="namn@exempel.se"
+              disabled={!!existing}
+              className={`${inputClass} disabled:opacity-50`}
             />
           </label>
           <label>
@@ -1461,6 +1719,54 @@ function NewBookingModal({
               ))}
             </select>
           </label>
+          {existing && (
+            <p className="col-span-2 rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-3 py-2 text-[11px] leading-relaxed text-[var(--w-muted)]">
+              Gästen meddelas om ändringen via SMS och e-post.
+            </p>
+          )}
+          {!existing && (
+          <div className="col-span-2">
+            <span className="text-xs text-[var(--w-muted)]">Status</span>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                aria-pressed={status === "PENDING"}
+                onClick={() => setStatus("PENDING")}
+                className={`rounded-xl border p-3 text-left transition-colors ${
+                  status === "PENDING"
+                    ? "border-[var(--w-accent)] bg-[var(--w-accent)]/10"
+                    : "border-[var(--w-line)] hover:border-[var(--w-muted)]"
+                }`}
+              >
+                <span className="block text-sm font-semibold">Preliminär</span>
+                <span className="mt-0.5 block text-[11px] text-[var(--w-muted)]">
+                  Kortlänk mejlas till gästen
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={status === "CONFIRMED"}
+                onClick={() => setStatus("CONFIRMED")}
+                className={`rounded-xl border p-3 text-left transition-colors ${
+                  status === "CONFIRMED"
+                    ? "border-[var(--w-accent)] bg-[var(--w-accent)]/10"
+                    : "border-[var(--w-line)] hover:border-[var(--w-muted)]"
+                }`}
+              >
+                <span className="block text-sm font-semibold">Bekräftad</span>
+                <span className="mt-0.5 block text-[11px] text-[var(--w-muted)]">
+                  Godkänns utan kort
+                </span>
+              </button>
+            </div>
+            <p className="mt-2 rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-3 py-2 text-[11px] leading-relaxed text-[var(--w-muted)]">
+              {status === "PENDING"
+                ? "Gästen får ett mejl med en säker länk för att ange sitt kortnummer. Bokningen bekräftas automatiskt när kortet registrerats."
+                : "Bokningen bekräftas direkt utan kortgaranti — ingen no-show-avgift kan debiteras."}
+            </p>
+          </div>
+          )}
+          {!existing && (
           <label className="col-span-2">
             <span className="text-xs text-[var(--w-muted)]">Anteckning</span>
             <textarea
@@ -1472,6 +1778,7 @@ function NewBookingModal({
               className={`${inputClass} resize-none`}
             />
           </label>
+          )}
         </div>
 
         {error && <p className="mt-3 text-xs text-yellow-400">{error}</p>}
@@ -1488,7 +1795,7 @@ function NewBookingModal({
             disabled={saving}
             className="min-h-11 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
           >
-            {saving ? "Skapar…" : "Skapa bokning"}
+            {saving ? "Sparar…" : existing ? "Spara ändringar" : "Skapa bokning"}
           </button>
         </div>
       </div>

@@ -123,6 +123,12 @@ export async function POST(request: NextRequest) {
     closedDates: [],
     bookingStopDates: [],
     sameDayCutoff: "14:00",
+    noShowFeePerGuest: 250,
+    cancellationWindowHours: 4,
+    cardGuaranteeRequired: true,
+    cardGuaranteeSince: null,
+    eventDates: [],
+    depositDates: [],
     // Nya restauranger får nya designspråket; befintliga behåller classic
     theme: "warm",
     widgetTheme: "warm-light",

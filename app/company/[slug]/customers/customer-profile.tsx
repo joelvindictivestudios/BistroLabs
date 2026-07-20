@@ -51,10 +51,13 @@ export function CustomerProfile({
   slug,
   guest,
   onEdit,
+  onTagsChange,
 }: {
   slug: string;
   guest: CustomerRow;
   onEdit: () => void;
+  /** Lyfter märkningsändringar till listan — tabellens chips ska följa med direkt. */
+  onTagsChange?: (tags: string[]) => void;
 }) {
   const [tags, setTags] = useState<string[]>(guest.tags ?? []);
   const [noShowCount, setNoShowCount] = useState(guest.noShowCount ?? 0);
@@ -92,6 +95,8 @@ export function CustomerProfile({
       ? tags.filter((t) => t !== key)
       : [...tags, key];
     setTags(next);
+    // Optimistiskt även i tabellen — panelen och raden ska aldrig visa olika
+    onTagsChange?.(next);
     setSaved(false);
     setError(null);
     try {

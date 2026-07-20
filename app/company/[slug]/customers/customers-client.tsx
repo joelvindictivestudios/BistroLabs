@@ -335,6 +335,18 @@ export function CustomersClient({ slug, initialGuests }: Props) {
                 slug={slug}
                 guest={drawer.guest}
                 onEdit={() => setDrawer({ mode: "edit", guest: drawer.guest })}
+                onTagsChange={(tags) => {
+                  const guestId = drawer.guest.id;
+                  // Tabellens chips + panelens gäst-snapshot följer med direkt
+                  setGuests((gs) =>
+                    gs.map((g) => (g.id === guestId ? { ...g, tags } : g)),
+                  );
+                  setDrawer((d) =>
+                    d && d.mode !== "create" && d.guest.id === guestId
+                      ? { ...d, guest: { ...d.guest, tags } }
+                      : d,
+                  );
+                }}
               />
             )}
             {(drawer.mode === "edit" || drawer.mode === "create") && (

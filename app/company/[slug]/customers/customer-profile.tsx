@@ -65,6 +65,9 @@ export function CustomerProfile({
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Egna märkningar utöver de tre fasta — fritext, sparas i samma tags-array
+  const [addingTag, setAddingTag] = useState(false);
+  const [newTag, setNewTag] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -90,10 +93,7 @@ export function CustomerProfile({
     };
   }, [slug, guest.id]);
 
-  async function toggleTag(key: string) {
-    const next = tags.includes(key)
-      ? tags.filter((t) => t !== key)
-      : [...tags, key];
+  async function saveTags(next: string[]) {
     setTags(next);
     // Optimistiskt även i tabellen — panelen och raden ska aldrig visa olika
     onTagsChange?.(next);
@@ -114,6 +114,33 @@ export function CustomerProfile({
     } catch {
       setError("Kunde inte spara märkningen.");
     }
+  }
+
+  function toggleTag(key: string) {
+    void saveTags(
+      tags.includes(key) ? tags.filter((t) => t !== key) : [...tags, key],
+    );
+  }
+
+  function addCustomTag() {
+    const value = newTag.trim();
+    if (!value) return;
+    if (tags.some((t) => t.toLowerCase() === value.toLowerCase())) {
+      setNewTag("");
+      setAddingTag(false);
+      return;
+    }
+    if (value.length > 30) {
+      setError("Max 30 tecken per märkning.");
+      return;
+    }
+    if (tags.length >= 10) {
+      setError("Max 10 märkningar per gäst.");
+      return;
+    }
+    setNewTag("");
+    setAddingTag(false);
+    void saveTags([...tags, value]);
   }
 
   const dateLabel = (iso: string) =>
@@ -172,15 +199,15 @@ export function CustomerProfile({
         </div>
       </div>
 
-      {/* Märkningar */}
+      {/* Märkningar: tre fasta + egna fritextmärkningar i samma tags-array */}
       <div className="mt-5">
         <p className="text-xs text-[var(--w-muted)]">Märkning</p>
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {TAGS.map((t) => (
             <button
               key={t.key}
               aria-pressed={tags.includes(t.key)}
-              onClick={() => void toggleTag(t.key)}
+              onClick={() => toggleTag(t.key)}
               className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
                 tags.includes(t.key)
                   ? "border-[var(--w-accent)] bg-[var(--w-accent)]/15 text-[var(--w-ink)]"
@@ -190,6 +217,54 @@ export function CustomerProfile({
               {t.label}
             </button>
           ))}
+          {tags
+            .filter((t) => !TAGS.some((s) => s.key === t))
+            .map((t) => (
+              <button
+                key={t}
+                onClick={() => void saveTags(tags.filter((x) => x !== t))}
+                title="Ta bort märkningen"
+                className="group flex items-center gap-1.5 rounded-full border border-[var(--w-line)] bg-[var(--w-bg)] px-3 py-1.5 text-xs font-semibold text-[var(--w-ink)] transition-colors hover:border-status-late-border hover:text-status-late-fg"
+              >
+                {t}
+                <span aria-hidden className="text-[var(--w-muted)] group-hover:text-status-late-fg">
+                  ✕
+                </span>
+              </button>
+            ))}
+          {addingTag ? (
+            <span className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={newTag}
+                onChange={(e) => setNewTag(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addCustomTag();
+                  if (e.key === "Escape") {
+                    setAddingTag(false);
+                    setNewTag("");
+                  }
+                }}
+                maxLength={30}
+                placeholder="Egen märkning…"
+                className="w-32 rounded-full border border-[var(--w-accent)] bg-transparent px-3 py-1.5 text-xs focus:outline-none"
+              />
+              <button
+                onClick={addCustomTag}
+                disabled={!newTag.trim()}
+                className="rounded-full bg-[var(--w-accent)] px-3 py-1.5 text-xs font-semibold text-accent-on hover:brightness-110 disabled:opacity-50 transition"
+              >
+                Lägg till
+              </button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setAddingTag(true)}
+              className="rounded-full border border-dashed border-[var(--w-line)] px-3 py-1.5 text-xs font-semibold text-[var(--w-muted)] transition-colors hover:border-[var(--w-accent)] hover:text-[var(--w-accent)]"
+            >
+              + Ny märkning
+            </button>
+          )}
         </div>
       </div>
 

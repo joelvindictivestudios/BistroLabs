@@ -269,7 +269,9 @@ export function CustomersClient({ slug, initialGuests }: Props) {
                               ? "border-status-late-border bg-status-late-bg text-status-late-fg"
                               : t === "stamgäst"
                                 ? "border-status-booked-border bg-status-booked-bg text-status-booked-fg"
-                                : "border-status-pending-border bg-status-pending-bg text-status-pending-fg"
+                                : t === "barnfamilj"
+                                  ? "border-status-pending-border bg-status-pending-bg text-status-pending-fg"
+                                  : "border-[var(--w-line)] bg-[var(--w-bg)] text-[var(--w-muted)]"
                           }`}
                         >
                           {t}

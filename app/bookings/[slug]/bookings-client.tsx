@@ -332,6 +332,8 @@ export function BookingsClient({
     data?.bookings.find((b) => b.id === modalBookingId) ?? null;
   const [dropInOpen, setDropInOpen] = useState(false);
   const [newBookingOpen, setNewBookingOpen] = useState(false);
+  // "Ändra bokning" (§3.10): NewBookingModal i edit-läge
+  const [editBookingId, setEditBookingId] = useState<string | null>(null);
   // No-show- och avbokningsdialogerna (§3.4, §3.5) — id-baserade så en
   // realtime-refetch aldrig klipper pågående dialog
   const [noShowForId, setNoShowForId] = useState<string | null>(null);
@@ -960,9 +962,32 @@ export function BookingsClient({
           onNoShow={() => setNoShowForId(modalBooking.id)}
           onCancel={() => setCancelForId(modalBooking.id)}
           onPreviewMail={() => setMailForId(modalBooking.id)}
+          onEdit={() => setEditBookingId(modalBooking.id)}
           onClose={() => setModalBookingId(null)}
         />
       )}
+
+      {/* Ändra bokning (§3.10): namn, telefon, antal, tid, bord */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === editBookingId);
+        if (!b || !data) return null;
+        return (
+          <NewBookingModal
+            slug={slug}
+            date={date}
+            timeSlots={timeSlots}
+            tables={data.tables}
+            rooms={data.rooms}
+            existing={b}
+            patchBooking={patchBooking}
+            onClose={() => setEditBookingId(null)}
+            onCreated={() => {
+              setEditBookingId(null);
+              void fetchDay(dateRef.current);
+            }}
+          />
+        );
+      })()}
 
       {/* "Visa utskick" (§3.7) — över bokningsmodalen */}
       {(() => {
@@ -1132,6 +1157,7 @@ function BookingModal({
   onNoShow,
   onCancel,
   onPreviewMail,
+  onEdit,
   onClose,
 }: {
   booking: Booking;
@@ -1155,6 +1181,7 @@ function BookingModal({
   onNoShow: () => void;
   onCancel: () => void;
   onPreviewMail: () => void;
+  onEdit: () => void;
   onClose: () => void;
 }) {
   const clock = (iso: string) =>
@@ -1431,20 +1458,28 @@ function BookingModal({
             </button>
           )}
           {(booking.status === "PENDING" || booking.status === "CONFIRMED") && (
-            <div className="grid grid-cols-2 gap-2">
+            <>
               <button
-                onClick={onNoShow}
-                className="min-h-11 rounded-xl border border-status-late-border text-sm font-medium text-status-late-fg hover:bg-status-late-bg transition"
+                onClick={onEdit}
+                className="min-h-11 w-full rounded-xl border border-[var(--w-line)] text-sm font-medium text-[var(--w-ink)] hover:border-[var(--w-muted)] transition"
               >
-                No-show…
+                Ändra bokning
               </button>
-              <button
-                onClick={onCancel}
-                className="min-h-11 rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
-              >
-                Avboka…
-              </button>
-            </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={onNoShow}
+                  className="min-h-11 rounded-xl border border-status-late-border text-sm font-medium text-status-late-fg hover:bg-status-late-bg transition"
+                >
+                  No-show…
+                </button>
+                <button
+                  onClick={onCancel}
+                  className="min-h-11 rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
+                >
+                  Avboka…
+                </button>
+              </div>
+            </>
           )}
           <button
             onClick={onClose}
@@ -1464,6 +1499,8 @@ function NewBookingModal({
   timeSlots,
   tables,
   rooms,
+  existing = null,
+  patchBooking,
   onClose,
   onCreated,
 }: {
@@ -1472,18 +1509,38 @@ function NewBookingModal({
   timeSlots: number[];
   tables: TableRow[];
   rooms: Room[];
+  /** Satt = "Ändra bokning" (§3.10): prefyllt, statusväljaren dold, PATCH. */
+  existing?: Booking | null;
+  patchBooking?: (
+    id: string,
+    body: {
+      partySize?: number;
+      guestName?: string;
+      guestPhone?: string | null;
+      tableId?: string;
+      date?: string;
+      time?: string;
+    },
+  ) => Promise<boolean>;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const nowM = new Date().getHours() * 60 + new Date().getMinutes();
   const defaultSlot =
     timeSlots.find((m) => m >= nowM) ?? timeSlots[0] ?? 17 * 60;
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [time, setTime] = useState(formatMinutes(defaultSlot));
-  const [party, setParty] = useState(2);
-  const [tableId, setTableId] = useState<string>(""); // "" = auto
+  const [name, setName] = useState(existing?.guestName ?? "");
+  const [phone, setPhone] = useState(existing?.guestPhone ?? "");
+  const [email, setEmail] = useState(existing?.guestEmail ?? "");
+  const [time, setTime] = useState(() =>
+    existing
+      ? new Date(existing.startsAt).toLocaleTimeString("sv-SE", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : formatMinutes(defaultSlot),
+  );
+  const [party, setParty] = useState(existing?.partySize ?? 2);
+  const [tableId, setTableId] = useState<string>(existing?.tableId ?? ""); // "" = auto
   const [notes, setNotes] = useState("");
   // Preliminär är default (§3.2): kortlänken mejlas, bokningen bekräftas
   // automatiskt när gästen angett kort
@@ -1491,7 +1548,39 @@ function NewBookingModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function saveEdit() {
+    if (!existing || !patchBooking) return;
+    if (!name.trim()) {
+      setError("Ange gästens namn.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const currentTime = new Date(existing.startsAt).toLocaleTimeString(
+      "sv-SE",
+      { hour: "2-digit", minute: "2-digit" },
+    );
+    const ok = await patchBooking(existing.id, {
+      ...(name.trim() !== existing.guestName
+        ? { guestName: name.trim() }
+        : {}),
+      ...(phone.trim() !== (existing.guestPhone ?? "")
+        ? { guestPhone: phone.trim() || null }
+        : {}),
+      ...(party !== existing.partySize ? { partySize: party } : {}),
+      ...(time !== currentTime ? { date, time } : {}),
+      ...(tableId && tableId !== existing.tableId ? { tableId } : {}),
+    });
+    setSaving(false);
+    if (ok) onCreated();
+    else setError("Ändringen misslyckades — se felmeddelandet i dagvyn.");
+  }
+
   async function create() {
+    if (existing) {
+      await saveEdit();
+      return;
+    }
     if (!name.trim()) {
       setError("Ange gästens namn.");
       return;
@@ -1550,7 +1639,7 @@ function NewBookingModal({
         className="w-full max-w-md rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-6 shadow-2xl"
       >
         <h3 className="text-xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
-          Ny bokning · {date}
+          {existing ? "Ändra bokning" : "Ny bokning"} · {date}
         </h3>
         <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
           <label className="col-span-2">
@@ -1575,14 +1664,20 @@ function NewBookingModal({
           </label>
           <label className="col-span-2">
             <span className="text-xs text-[var(--w-muted)]">
-              E-post{status === "PENDING" ? "" : " (valfritt)"}
+              E-post
+              {existing
+                ? " (ändras på kundkortet)"
+                : status === "PENDING"
+                  ? ""
+                  : " (valfritt)"}
             </span>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="namn@exempel.se"
-              className={inputClass}
+              disabled={!!existing}
+              className={`${inputClass} disabled:opacity-50`}
             />
           </label>
           <label>
@@ -1623,6 +1718,12 @@ function NewBookingModal({
               ))}
             </select>
           </label>
+          {existing && (
+            <p className="col-span-2 rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-3 py-2 text-[11px] leading-relaxed text-[var(--w-muted)]">
+              Gästen meddelas om ändringen via SMS och e-post.
+            </p>
+          )}
+          {!existing && (
           <div className="col-span-2">
             <span className="text-xs text-[var(--w-muted)]">Status</span>
             <div className="mt-1 grid grid-cols-2 gap-2">
@@ -1663,6 +1764,8 @@ function NewBookingModal({
                 : "Bokningen bekräftas direkt utan kortgaranti — ingen no-show-avgift kan debiteras."}
             </p>
           </div>
+          )}
+          {!existing && (
           <label className="col-span-2">
             <span className="text-xs text-[var(--w-muted)]">Anteckning</span>
             <textarea
@@ -1674,6 +1777,7 @@ function NewBookingModal({
               className={`${inputClass} resize-none`}
             />
           </label>
+          )}
         </div>
 
         {error && <p className="mt-3 text-xs text-yellow-400">{error}</p>}
@@ -1690,7 +1794,7 @@ function NewBookingModal({
             disabled={saving}
             className="min-h-11 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
           >
-            {saving ? "Skapar…" : "Skapa bokning"}
+            {saving ? "Sparar…" : existing ? "Spara ändringar" : "Skapa bokning"}
           </button>
         </div>
       </div>

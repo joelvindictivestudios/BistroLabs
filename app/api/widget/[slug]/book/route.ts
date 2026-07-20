@@ -6,6 +6,8 @@ import { createBooking } from "@/lib/booking/availability";
 import { guestBookingBlocked } from "@/lib/booking/rules";
 import { findOrCreateGuest } from "@/lib/booking/guests";
 import { ALLERGY_CONSENT_TEXT } from "@/lib/booking/consent";
+import { registerCard } from "@/lib/payments/psp";
+import { getUser } from "@/lib/auth/server";
 import { embed } from "@/lib/ai/embeddings";
 import { setInteractionEmbedding } from "@/lib/db/vector";
 import { notifyGuest, logCommunication } from "@/lib/messaging/notify";
@@ -30,6 +32,19 @@ const bookRequestSchema = z
     /** Hälsouppgift (GDPR art 9) — lagras i Booking.allergyNote, gallras vid COMPLETED */
     allergies: z.string().max(300).optional(),
     allergyConsent: z.boolean().optional(),
+    /**
+     * Kortgaranti (§3.1): krävs när restaurangen har cardGuaranteeRequired.
+     * Fälten går direkt till PSP-stubben och persisteras ALDRIG — endast
+     * token + last4 sparas (PCI DSS).
+     */
+    card: z
+      .object({
+        number: z.string().min(12).max(30),
+        expMonth: z.number().int().min(1).max(12),
+        expYear: z.number().int().min(0).max(2100),
+        cvc: z.string().regex(/^\d{3,4}$/),
+      })
+      .optional(),
   })
   .refine((d) => d.email || d.phone, {
     message: "Ange e-post eller telefonnummer",
@@ -87,7 +102,37 @@ export async function POST(
     );
   }
 
+  // Kortgarantin (§2 p.2): kortet registreras som garanti — inget dras nu.
+  // Av per restaurang (§2b p.4): utan kravet bokas gästen bekräftat direkt.
+  let card: { pspToken: string; last4: string } | null = null;
+  if (config.cardGuaranteeRequired) {
+    if (!body.card) {
+      return NextResponse.json(
+        { error: "Kortgaranti krävs för onlinebokning — ange kortuppgifter." },
+        { status: 400 },
+      );
+    }
+    const registered = await registerCard(body.card);
+    if (!registered.ok) {
+      return NextResponse.json({ error: registered.error }, { status: 400 });
+    }
+    card = { pspToken: registered.pspToken, last4: registered.last4 };
+  }
+
   const { guest } = await findOrCreateGuest(restaurant.id, body);
+
+  // Matgäst-konto: inloggad gäst (kind: "guest") kopplas till kundkortet
+  const sessionUser = await getUser();
+  if (
+    sessionUser &&
+    (sessionUser.user_metadata as { kind?: string } | undefined)?.kind ===
+      "guest"
+  ) {
+    await prisma.guest.updateMany({
+      where: { id: guest.id, authUserId: null },
+      data: { authUserId: sessionUser.id },
+    });
+  }
 
   const result = await createBooking(
     restaurant.id,
@@ -104,7 +149,7 @@ export async function POST(
   }
 
   const allergies = body.allergies?.trim();
-  if (body.childrenCount > 0 || allergies) {
+  if (body.childrenCount > 0 || allergies || card) {
     await prisma.booking.update({
       where: { id: result.bookingId },
       data: {
@@ -115,6 +160,9 @@ export async function POST(
               allergyConsentAt: new Date(),
               allergyConsentText: ALLERGY_CONSENT_TEXT,
             }
+          : {}),
+        ...(card
+          ? { cardPspToken: card.pspToken, cardLast4: card.last4 }
           : {}),
       },
     });
@@ -193,6 +241,9 @@ export async function POST(
     console.error("Kunde inte spara widget-interaktion:", e);
   }
 
+  const manageEndsAt = new Date(
+    result.startsAt.getTime() + config.bookingDurationMinutes * 60_000,
+  );
   return NextResponse.json({
     bookingId: result.bookingId,
     tableName: result.tableName,
@@ -200,5 +251,11 @@ export async function POST(
     time: body.time,
     partySize: body.partySize,
     childrenCount: body.childrenCount,
+    cardLast4: card?.last4 ?? null,
+    manageUrl: buildManageUrl(
+      appBaseUrl(request.nextUrl.origin),
+      result.bookingId,
+      manageEndsAt,
+    ),
   });
 }

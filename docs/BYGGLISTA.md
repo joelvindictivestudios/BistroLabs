@@ -91,11 +91,11 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 9 — Widgetens kortsteg + återstående personalfunktioner
 *Beroende: etapp 3 + 5.*
 
-- [ ] Kortsteg i widgeten (steget mellan uppgifter och bekräftat) bakom `cardGuaranteeRequired`: kortfält mot PSP-stubben, infotext "inget dras nu" + policy; bekräftelsesidan får kortgaranti-raden + hanteringslänken (§3.1)
-- [ ] Uppgiftssteget: logga in / skapa konto / fortsätt som gäst (§3.1) — gästkonton är en större bit; "fortsätt som gäst" är bärande flödet, kontodelen kan tas som egen punkt om den drar
-- [ ] Återaktivera avbokade bokningar: → `CONFIRMED` om kort finns, annars `PENDING`; avbokade visas nedtonade med grå badge (§3.5)
-- [ ] Ändra bokning: `partySize`, namn och telefon in i PATCH + detaljmodalen — gästnotisen kommer via etapp 6 (§3.10)
-- [ ] Specialdagstyperna **Event** och **Deposition** i kalendern — endast listning, depositionsflödet är utanför scope (§3.11, §4)
+- [x] Kortsteg i widgeten (steget mellan uppgifter och bekräftat) bakom `cardGuaranteeRequired`: kortfält mot PSP-stubben, infotext "inget dras nu" + policy; bekräftelsesidan får kortgaranti-raden + hanteringslänken (§3.1)
+- [x] Uppgiftssteget: logga in / skapa konto / fortsätt som gäst (§3.1) — gästkonton är en större bit; "fortsätt som gäst" är bärande flödet, kontodelen kan tas som egen punkt om den drar
+- [x] Återaktivera avbokade bokningar: → `CONFIRMED` om kort finns, annars `PENDING`; avbokade visas nedtonade med grå badge (§3.5)
+- [x] Ändra bokning: `partySize`, namn och telefon in i PATCH + detaljmodalen — gästnotisen kommer via etapp 6 (§3.10)
+- [x] Specialdagstyperna **Event** och **Deposition** i kalendern — endast listning, depositionsflödet är utanför scope (§3.11, §4)
 
 **Klart när:** gästflödet kräver kort där det är påslaget, och personal kan återaktivera samt ändra alla bokningsfält.
 

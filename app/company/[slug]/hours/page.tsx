@@ -28,6 +28,8 @@ export default async function HoursPage({
         openingHours: config.openingHours,
         closedDates: config.closedDates,
         bookingStopDates: config.bookingStopDates,
+        eventDates: config.eventDates,
+        depositDates: config.depositDates,
       }}
     />
   );

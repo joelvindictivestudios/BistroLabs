@@ -38,6 +38,10 @@ const patchSchema = z
     reactivate: z.boolean().optional(),
     /** No-show med debitering (§3.4): beloppet beräknas ALLTID server-side. */
     chargeNoShowFee: z.boolean().optional(),
+    /** Ändra bokning (§3.10): antal, namn och telefon. */
+    partySize: z.number().int().min(1).max(50).optional(),
+    guestName: z.string().min(1).max(120).optional(),
+    guestPhone: z.string().min(5).max(30).nullable().optional(),
     // Tidsändring: date+time (lokal restaurangtid); endTime valfri —
     // annars start + bookingDurationMinutes
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -110,6 +114,9 @@ export async function PATCH(
     cancelReason,
     reactivate,
     chargeNoShowFee: chargeFee,
+    partySize,
+    guestName,
+    guestPhone,
     date,
     time,
     endTime,
@@ -141,6 +148,7 @@ export async function PATCH(
 
   // Flytt: kapacitet är ett hårt krav (fysiskt), minSeats ignoreras — personalen
   // vet bäst när de möblerar om. Tidskrockar stoppas av bookings_no_overlap.
+  const effectiveParty = partySize ?? booking.partySize;
   if (tableId !== undefined) {
     const table = await prisma.diningTable.findFirst({
       where: { id: tableId, restaurantId: restaurant.id },
@@ -148,13 +156,58 @@ export async function PATCH(
     if (!table) {
       return NextResponse.json({ error: "Okänt bord." }, { status: 404 });
     }
-    if (table.capacity < booking.partySize) {
+    if (table.capacity < effectiveParty) {
       return NextResponse.json(
         {
-          error: `${table.name} rymmer bara ${table.capacity} — sällskapet är ${booking.partySize}.`,
+          error: `${table.name} rymmer bara ${table.capacity} — sällskapet är ${effectiveParty}.`,
         },
         { status: 400 },
       );
+    }
+  } else if (partySize !== undefined && booking.tableId) {
+    // Antalet växer: nuvarande bord måste rymma sällskapet (§3.10)
+    const current = await prisma.diningTable.findUnique({
+      where: { id: booking.tableId },
+    });
+    if (current && current.capacity < partySize) {
+      return NextResponse.json(
+        {
+          error: `${current.name} rymmer bara ${current.capacity} — flytta bokningen till ett större bord först.`,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
+  // Gästuppgifter (§3.10): namn/telefon skrivs på kundkortet — delad Guest-rad,
+  // ändringen slår igenom på gästens alla bokningar (det ÄR kundkortet).
+  if (guestName !== undefined || guestPhone !== undefined) {
+    try {
+      await prisma.guest.update({
+        where: { id: booking.guestId },
+        data: {
+          ...(guestName !== undefined ? { name: guestName.trim() } : {}),
+          ...(guestPhone !== undefined
+            ? { phone: guestPhone?.trim() || null }
+            : {}),
+        },
+      });
+    } catch (e) {
+      if (
+        e &&
+        typeof e === "object" &&
+        "code" in e &&
+        (e as { code?: string }).code === "P2002"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Telefonnumret används redan av en annan kund — koppla bokningen till den kunden istället.",
+          },
+          { status: 409 },
+        );
+      }
+      throw e;
     }
   }
 
@@ -207,6 +260,7 @@ export async function PATCH(
       ...(tableId !== undefined ? { tableId } : {}),
       ...(status !== undefined ? { status } : {}),
       ...(guestId !== undefined ? { guestId } : {}),
+      ...(partySize !== undefined ? { partySize } : {}),
       ...(newTimes ? { startsAt: newTimes.startsAt, endsAt: newTimes.endsAt } : {}),
       ...(staffNote !== undefined ? { staffNote: staffNote?.trim() || null } : {}),
       // Incheckning: stämpla tid + default anlända = bokat antal (justerbart)
@@ -327,8 +381,10 @@ export async function PATCH(
       }
     }
 
-    // Tidsflytt är gästpåverkande — bordbyte/anteckningar är det inte
-    if (newTimes && status !== "CANCELLED") {
+    // Tidsflytt/antalsändring är gästpåverkande — bordbyte/anteckningar inte
+    const partyChanged =
+      partySize !== undefined && partySize !== booking.partySize;
+    if ((newTimes || partyChanged) && status !== "CANCELLED") {
       await notifyGuest({
         bookingId: booking.id,
         guest: booking.guest,

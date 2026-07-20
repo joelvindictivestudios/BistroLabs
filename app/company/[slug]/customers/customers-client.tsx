@@ -98,7 +98,7 @@ export function CustomersClient({ slug, initialGuests }: Props) {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight [font-family:var(--font-display),sans-serif]">
-            Kunder
+            Gäster
           </h1>
           <p className="mt-1 text-sm text-[var(--w-muted)]">
             Alla gäster som bokat via widget, telefon eller lagts in manuellt.
@@ -131,7 +131,7 @@ export function CustomersClient({ slug, initialGuests }: Props) {
             className="flex h-10 items-center gap-2 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on shadow-lg shadow-black/25 hover:brightness-110 transition"
           >
             <HugeiconsIcon icon={UserAdd01Icon} size={18} strokeWidth={1.8} />
-            Ny kund
+            Ny gäst
           </button>
         </div>
       </div>
@@ -246,7 +246,7 @@ export function CustomersClient({ slug, initialGuests }: Props) {
             {guests.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-6 text-[var(--w-muted)]">
-                  Inga kunder {query ? "matchade sökningen" : "ännu"}.
+                  Inga gäster {query ? "matchade sökningen" : "ännu"}.
                 </td>
               </tr>
             )}
@@ -426,7 +426,7 @@ export function CustomerForm({
   return (
     <div className="rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-5">
       <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
-        {existing ? "Redigera kund" : "Ny kund"}
+        {existing ? "Redigera gäst" : "Ny gäst"}
       </p>
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
         <input
@@ -502,7 +502,7 @@ export function CustomerForm({
               onClick={() => setDeleteArmed(true)}
               className="h-9 rounded-xl border border-[#5c3a30] px-4 text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
             >
-              Radera kund…
+              Radera gäst…
             </button>
           ))}
         <span className="ml-auto flex gap-2">
@@ -517,7 +517,7 @@ export function CustomerForm({
             disabled={saving}
             className="h-9 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on hover:brightness-110 disabled:opacity-60 transition"
           >
-            {saving ? "Sparar…" : existing ? "Spara ändringar" : "Skapa kund"}
+            {saving ? "Sparar…" : existing ? "Spara ändringar" : "Skapa gäst"}
           </button>
         </span>
       </div>

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
 import { CustomersClient } from "./customers-client";
 
-export const metadata = { title: "Kunder — BistroLabs" };
+export const metadata = { title: "Gäster — BistroLabs" };
 
 export default async function CustomersPage({
   params,

@@ -6,9 +6,15 @@ import { createBooking } from "@/lib/booking/availability";
 import { guestBookingBlocked } from "@/lib/booking/rules";
 import { findOrCreateGuest } from "@/lib/booking/guests";
 import { ALLERGY_CONSENT_TEXT } from "@/lib/booking/consent";
-import { sendEmail } from "@/lib/messaging/send";
 import { embed } from "@/lib/ai/embeddings";
 import { setInteractionEmbedding } from "@/lib/db/vector";
+import { notifyGuest, logCommunication } from "@/lib/messaging/notify";
+import {
+  bekraftelseMail,
+  formatBookingWhen,
+} from "@/lib/messaging/templates";
+import { buildManageUrl } from "@/lib/booking/manage-token";
+import { appBaseUrl } from "@/lib/urls";
 
 const bookRequestSchema = z
   .object({
@@ -113,28 +119,46 @@ export async function POST(
     });
   }
 
-  // Bekräftelsemejl — transaktionsutskick, kräver inget marknadsföringssamtycke.
+  // Kommunikationslogg: bokningen mottagen (tidslinjen i bokningsdetaljen)
+  await logCommunication(result.bookingId, "RECEIVED", null, {
+    kalla: "widget",
+  });
+
+  // Bekräftelsemejl (mall 1, §3.7) med hanteringslänk + policyfot —
+  // transaktionsutskick, kräver inget marknadsföringssamtycke.
   // Best-effort: ett mejlfel får aldrig fälla bokningen.
   const guestEmail = body.email ?? guest.email;
   if (guestEmail) {
-    try {
-      const sent = await sendEmail({
-        to: guestEmail,
-        subject: `Bokningsbekräftelse — ${restaurant.name}`,
-        text:
-          `Hej${body.name ? ` ${body.name}` : ""}!\n\n` +
-          `Din bokning för ${body.partySize} ${body.partySize === 1 ? "person" : "personer"} ` +
-          `den ${body.date} kl ${body.time} är bekräftad (bord ${result.tableName}).\n\n` +
-          `Välkommen!\n${restaurant.name}`,
+    const endsAt = new Date(
+      result.startsAt.getTime() + config.bookingDurationMinutes * 60_000,
+    );
+    const { emailOk } = await notifyGuest({
+      bookingId: result.bookingId,
+      guest: { email: guestEmail, phone: body.phone ?? guest.phone },
+      type: "CONFIRMATION",
+      email: bekraftelseMail({
+        restaurantName: restaurant.name,
+        guestName: body.name ?? guest.name,
+        whenText: formatBookingWhen(result.startsAt, config.timezone),
+        partySize: body.partySize,
+        tableName: result.tableName,
+        manageUrl: buildManageUrl(
+          appBaseUrl(request.nextUrl.origin),
+          result.bookingId,
+          endsAt,
+        ),
+        policy: {
+          cancellationWindowHours: config.cancellationWindowHours,
+          noShowFeePerGuest: config.noShowFeePerGuest,
+          cardGuaranteeRequired: config.cardGuaranteeRequired,
+        },
+      }),
+    });
+    if (emailOk) {
+      await prisma.booking.update({
+        where: { id: result.bookingId },
+        data: { confirmationSentAt: new Date() },
       });
-      if (sent.ok) {
-        await prisma.booking.update({
-          where: { id: result.bookingId },
-          data: { confirmationSentAt: new Date() },
-        });
-      }
-    } catch (e) {
-      console.error("Kunde inte skicka bokningsbekräftelse:", e);
     }
   }
 

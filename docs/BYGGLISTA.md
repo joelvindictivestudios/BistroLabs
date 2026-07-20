@@ -62,11 +62,11 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 6 — Utskicken kompletta
 *Beroende: etapp 2.*
 
-- [ ] Alla tre mallar får hanteringslänk + policyfoten "fri avbokning/ändring till X tim före; Y kr/gäst vid no-show" — värden från config, inte hårdkodade (§3.7)
-- [ ] Gästnotis vid personalens **avbokning** och **ändring** — går inte ut tyst längre (§2 p.6, §3.5, §3.10)
-- [ ] Påminnelsejobbet utökas: även `PENDING` (kortpåminnelse-variant enligt §2 p.4) och hanteringslänk i båda varianterna
-- [ ] **"Visa utskick"**-flik i bokningsdetaljen: förhandsvisning av mallarna med bokningens data (§3.7)
-- [ ] Tidslinjen **"Kommunikation"** i bokningsdetaljen, driven av `CommunicationLog` (§1)
+- [x] Alla tre mallar får hanteringslänk + policyfoten "fri avbokning/ändring till X tim före; Y kr/gäst vid no-show" — värden från config, inte hårdkodade (§3.7)
+- [x] Gästnotis vid personalens **avbokning** och **ändring** — går inte ut tyst längre (§2 p.6, §3.5, §3.10)
+- [x] Påminnelsejobbet utökas: även `PENDING` (kortpåminnelse-variant enligt §2 p.4) och hanteringslänk i båda varianterna
+- [x] **"Visa utskick"**-flik i bokningsdetaljen: förhandsvisning av mallarna med bokningens data (§3.7)
+- [x] Tidslinjen **"Kommunikation"** i bokningsdetaljen, driven av `CommunicationLog` (§1)
 
 **Klart när:** varje gästpåverkande händelse syns i tidslinjen och alla mallar har länk + policyfot.
 

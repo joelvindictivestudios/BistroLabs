@@ -22,6 +22,8 @@ import {
 } from "./booking-panels";
 import { NoShowModal } from "./noshow-modal";
 import { CancelDialog } from "./cancel-dialog";
+import { CommTimeline } from "./comm-timeline";
+import { MailPreviewModal } from "./mail-preview-modal";
 
 // BLA-31: den operativa dagvyn. Bordskartan (read-only-layout) visar dagens
 // bokningar vid vald tidpunkt, uppdateras i realtid via Supabase postgres_changes,
@@ -314,6 +316,7 @@ export function BookingsClient({
   // realtime-refetch aldrig klipper pågående dialog
   const [noShowForId, setNoShowForId] = useState<string | null>(null);
   const [cancelForId, setCancelForId] = useState<string | null>(null);
+  const [mailForId, setMailForId] = useState<string | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const [attachBookingId, setAttachBookingId] = useState<string | null>(null);
   const [listDrag, setListDrag] = useState<{
@@ -916,9 +919,23 @@ export function BookingsClient({
           patchBooking={patchBooking}
           onNoShow={() => setNoShowForId(modalBooking.id)}
           onCancel={() => setCancelForId(modalBooking.id)}
+          onPreviewMail={() => setMailForId(modalBooking.id)}
           onClose={() => setModalBookingId(null)}
         />
       )}
+
+      {/* "Visa utskick" (§3.7) — över bokningsmodalen */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === mailForId);
+        if (!b) return null;
+        return (
+          <MailPreviewModal
+            slug={slug}
+            booking={b}
+            onClose={() => setMailForId(null)}
+          />
+        );
+      })()}
 
       {/* No-show-dialogen (§3.4): med/utan kort, debitering via PSP-stubben */}
       {(() => {
@@ -1073,6 +1090,7 @@ function BookingModal({
   patchBooking,
   onNoShow,
   onCancel,
+  onPreviewMail,
   onClose,
 }: {
   booking: Booking;
@@ -1095,6 +1113,7 @@ function BookingModal({
   ) => Promise<boolean>;
   onNoShow: () => void;
   onCancel: () => void;
+  onPreviewMail: () => void;
   onClose: () => void;
 }) {
   const clock = (iso: string) =>
@@ -1331,6 +1350,13 @@ function BookingModal({
             className="mt-1 w-full resize-none rounded-lg border border-[var(--w-line)] bg-[var(--w-bg)] px-3 py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
           />
         </div>
+
+        {/* Tidslinjen Kommunikation + "Visa utskick" (§1, §3.7) */}
+        <CommTimeline
+          booking={booking}
+          policy={policy}
+          onPreviewMail={onPreviewMail}
+        />
 
         {/* Åtgärder */}
         <div className="mt-5 space-y-2">

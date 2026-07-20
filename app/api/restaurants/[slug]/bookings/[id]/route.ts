@@ -7,11 +7,18 @@ import {
   withinOpeningHours,
 } from "@/lib/booking/availability";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
-import { sendEmail } from "@/lib/messaging/send";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { sendCardLink } from "@/lib/messaging/card-link";
 import { chargeNoShowFee, releaseCard } from "@/lib/payments/psp";
-import { logCommunication } from "@/lib/messaging/notify";
+import { logCommunication, notifyGuest } from "@/lib/messaging/notify";
+import {
+  bekraftelseMail,
+  andringsnotisMail,
+  avbokningsbekraftelseMail,
+  formatBookingWhen,
+} from "@/lib/messaging/templates";
+import { buildManageUrl } from "@/lib/booking/manage-token";
+import { appBaseUrl } from "@/lib/urls";
 
 const patchSchema = z
   .object({
@@ -78,7 +85,7 @@ export async function PATCH(
 
   const booking = await prisma.booking.findFirst({
     where: { id, restaurantId: restaurant.id },
-    include: { guest: { select: { name: true, email: true } } },
+    include: { guest: { select: { name: true, email: true, phone: true } } },
   });
   if (!booking) {
     return NextResponse.json({ error: "Okänd bokning." }, { status: 404 });
@@ -271,38 +278,64 @@ export async function PATCH(
       }
     }
 
-    // Bekräftelsemejl vid Bekräfta (PENDING → CONFIRMED) — best-effort,
-    // skickas bara en gång per bokning
+    // Gästnotiser (§2 p.6): bekräftelse (engångs), ändringsnotis vid
+    // tidsflytt, avbokningsbekräftelse — alla via mallmodulen med
+    // hanteringslänk + policyfot, loggade i CommunicationLog.
+    const config = parseRestaurantConfig(restaurant.config);
+    const mailData = {
+      restaurantName: restaurant.name,
+      guestName: booking.guest.name,
+      whenText: formatBookingWhen(updated.startsAt, config.timezone),
+      partySize: updated.partySize,
+      tableName: updated.table?.name ?? null,
+      manageUrl: buildManageUrl(
+        appBaseUrl(request.nextUrl.origin),
+        booking.id,
+        updated.endsAt,
+      ),
+      policy: {
+        cancellationWindowHours: config.cancellationWindowHours,
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      },
+    };
+
     if (
       status === "CONFIRMED" &&
       booking.status === "PENDING" &&
-      booking.guest.email &&
       !booking.confirmationSentAt
     ) {
-      try {
-        const config = parseRestaurantConfig(restaurant.config);
-        const local = new Intl.DateTimeFormat("sv-SE", {
-          timeZone: config.timezone,
-          dateStyle: "short",
-          timeStyle: "short",
-        }).format(updated.startsAt);
-        const sent = await sendEmail({
-          to: booking.guest.email,
-          subject: `Bokningsbekräftelse — ${restaurant.name}`,
-          text:
-            `Hej${booking.guest.name ? ` ${booking.guest.name}` : ""}!\n\n` +
-            `Din bokning för ${updated.partySize} ${updated.partySize === 1 ? "person" : "personer"} ` +
-            `${local} är bekräftad.\n\nVälkommen!\n${restaurant.name}`,
+      const { emailOk } = await notifyGuest({
+        bookingId: booking.id,
+        guest: booking.guest,
+        type: "CONFIRMATION",
+        email: bekraftelseMail(mailData),
+      });
+      if (emailOk) {
+        await prisma.booking.update({
+          where: { id: booking.id },
+          data: { confirmationSentAt: new Date() },
         });
-        if (sent.ok) {
-          await prisma.booking.update({
-            where: { id: booking.id },
-            data: { confirmationSentAt: new Date() },
-          });
-        }
-      } catch (e) {
-        console.error("Kunde inte skicka bokningsbekräftelse:", e);
       }
+    }
+
+    // Tidsflytt är gästpåverkande — bordbyte/anteckningar är det inte
+    if (newTimes && status !== "CANCELLED") {
+      await notifyGuest({
+        bookingId: booking.id,
+        guest: booking.guest,
+        type: "CHANGE",
+        email: andringsnotisMail(mailData),
+      });
+    }
+
+    if (status === "CANCELLED" && booking.status !== "CANCELLED") {
+      await notifyGuest({
+        bookingId: booking.id,
+        guest: booking.guest,
+        type: "CANCELLATION_CONFIRMATION",
+        email: avbokningsbekraftelseMail(mailData),
+      });
     }
 
     return NextResponse.json({

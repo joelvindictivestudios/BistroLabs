@@ -14,7 +14,8 @@ import {
   toShape,
   type Shape,
 } from "@/lib/floor-plan";
-import type { Booking, PolicyConfig } from "./booking-types";
+import type { Booking, PolicyConfig, WaitlistEntry } from "./booking-types";
+import { WaitlistCard } from "./waitlist-card";
 import {
   PendingCardPanel,
   ChargedPanel,
@@ -139,6 +140,7 @@ export function BookingsClient({
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [live, setLive] = useState(false);
+  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
   const dateRef = useRef(date);
   useEffect(() => {
     dateRef.current = date;
@@ -172,6 +174,24 @@ export function BookingsClient({
     const id = setTimeout(() => void fetchDay(date), 0);
     return () => clearTimeout(id);
   }, [date, fetchDay]);
+
+  // Väntelistan (§3.8): separat hämtning — dagvyns realtime driver den inte
+  const fetchWaitlist = useCallback(
+    async (d: string) => {
+      try {
+        const res = await fetch(`/api/restaurants/${slug}/waitlist?date=${d}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setWaitlist(data.waitlist ?? []);
+      } catch {
+        /* kortet döljs vid tom lista — inget fel att visa */
+      }
+    },
+    [slug],
+  );
+  useEffect(() => {
+    void fetchWaitlist(date);
+  }, [date, fetchWaitlist]);
 
   // --- Supabase Realtime: bookings-ändringar för denna restaurang ---
   useEffect(() => {
@@ -726,8 +746,28 @@ export function BookingsClient({
             </p>
           </div>
 
-          {/* Höger: dagens bokningslista */}
+          {/* Höger: väntelistan (§3.8) + dagens bokningslista */}
           <aside>
+            <WaitlistCard
+              entries={waitlist}
+              onOffer={async (id) => {
+                const entry = waitlist.find((w) => w.id === id);
+                await fetch(`/api/restaurants/${slug}/waitlist/${id}/offer`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    time: entry?.wishedFrom ?? "18:00",
+                  }),
+                }).catch(() => {});
+                await fetchWaitlist(dateRef.current);
+              }}
+              onRemove={async (id) => {
+                await fetch(`/api/restaurants/${slug}/waitlist/${id}`, {
+                  method: "DELETE",
+                }).catch(() => {});
+                await fetchWaitlist(dateRef.current);
+              }}
+            />
             <h2 className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
               Dagens bokningar ({(data?.bookings ?? []).length})
             </h2>
@@ -1004,6 +1044,7 @@ export function BookingsClient({
                     },
                   ).catch(() => {});
                   await fetchDay(dateRef.current);
+                  await fetchWaitlist(dateRef.current);
                 }
               })().finally(() => {
                 setDialogBusy(false);

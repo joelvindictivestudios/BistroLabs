@@ -82,9 +82,9 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 8 — Väntelistan
 *Beroende: etapp 1 + 7.*
 
-- [ ] Gäst: vid fullbokad önsketid i widgeten — "Ställ mig på väntelistan" → namn + mobil → status väntar (§3.8)
-- [ ] Personal: väntelistekortet överst i Bokningar, "Erbjud bord" → status erbjuden + SMS (§3.8)
-- [ ] Auto-match vid avbokning: om någon i kön passar (antal + tid) föreslås "Avboka och erbjud tiden till X" som primäråtgärd i avbokningsdialogen (§3.5)
+- [x] Gäst: vid fullbokad önsketid i widgeten — "Ställ mig på väntelistan" → namn + mobil → status väntar (§3.8)
+- [x] Personal: väntelistekortet överst i Bokningar, "Erbjud bord" → status erbjuden + SMS (§3.8)
+- [x] Auto-match vid avbokning: om någon i kön passar (antal + tid) föreslås "Avboka och erbjud tiden till X" som primäråtgärd i avbokningsdialogen (§3.5)
 
 **Klart när:** hela kedjan fullbokat → kö → avbokning → erbjudande → SMS fungerar.
 

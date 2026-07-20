@@ -59,6 +59,12 @@ function formatLong(dateStr: string): string {
   });
 }
 
+/** "19:00" → "20:00" — väntelistans önskeintervall runt en fullbokad tid. */
+function plusOneHour(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  return `${String((h + 1) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 export function BookingWidget({
   slug,
   name,
@@ -82,8 +88,18 @@ export function BookingWidget({
   const [time, setTime] = useState<string | null>(null);
   const [monthOffset, setMonthOffset] = useState(0);
   const [slots, setSlots] = useState<string[] | null>(null);
+  const [fullSlots, setFullSlots] = useState<string[]>([]);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  // Väntelistan (§3.8): CTA vid fullbokade tider → namn + mobil → i kön
+  const [wl, setWl] = useState<{
+    open: boolean;
+    joined: boolean;
+    name: string;
+    phone: string;
+    wish: string;
+    error: string | null;
+  }>({ open: false, joined: false, name: "", phone: "", wish: "", error: null });
 
   // Byggs upp till en mening allteftersom valen görs
   const sentence = useMemo(() => {
@@ -100,7 +116,9 @@ export function BookingWidget({
     (d: string, p: number) => {
       const requestId = ++slotsRequestId.current;
       setSlots(null);
+      setFullSlots([]);
       setSlotsError(null);
+      setWl({ open: false, joined: false, name: "", phone: "", wish: "", error: null });
       fetch(`/api/widget/${slug}/slots?date=${d}&party=${p}`)
         .then((r) => r.json())
         .then((data) => {
@@ -108,8 +126,10 @@ export function BookingWidget({
           if (data.blockedReason) {
             setSlots([]);
             setSlotsError(data.blockedReason);
-          } else if (Array.isArray(data.slots)) setSlots(data.slots);
-          else setSlotsError(data.error ?? "Kunde inte hämta tider");
+          } else if (Array.isArray(data.slots)) {
+            setSlots(data.slots);
+            setFullSlots(Array.isArray(data.fullSlots) ? data.fullSlots : []);
+          } else setSlotsError(data.error ?? "Kunde inte hämta tider");
         })
         .catch(() => {
           if (requestId === slotsRequestId.current)
@@ -280,25 +300,166 @@ export function BookingWidget({
               {slotsError && (
                 <p className="text-sm text-[var(--w-accent)]">{slotsError}</p>
               )}
-              {slots?.length === 0 && (
+              {slots?.length === 0 && !slotsError && (
                 <p className="text-sm text-[var(--w-muted)]">
-                  Inga lediga tider den dagen — prova ett annat datum.
+                  Inga lediga tider den dagen — prova ett annat datum
+                  {fullSlots.length > 0 ? " eller ställ dig på väntelistan" : ""}.
                 </p>
               )}
-              {slots && slots.length > 0 && (
+              {slots && (slots.length > 0 || fullSlots.length > 0) && (
                 <div className="grid grid-cols-4 gap-2 font-mono text-sm">
-                  {slots.map((t) => (
-                    <ChoiceButton
-                      key={t}
-                      selected={time === t}
+                  {[...slots, ...fullSlots].sort().map((t) => {
+                    const full = !slots.includes(t);
+                    if (full) {
+                      // Fullbokad tid: gråad + öppnar väntelisteformen (§3.8)
+                      return (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() =>
+                            setWl((s) => ({
+                              ...s,
+                              open: true,
+                              wish: `${t}–${plusOneHour(t)}`,
+                              error: null,
+                            }))
+                          }
+                          className="rounded-lg border border-[var(--w-line)] px-2 py-2.5 text-[var(--w-muted)]/40 line-through decoration-1 hover:border-[var(--w-muted)] transition"
+                          title="Fullbokat — ställ dig på väntelistan"
+                        >
+                          {t}
+                        </button>
+                      );
+                    }
+                    return (
+                      <ChoiceButton
+                        key={t}
+                        selected={time === t}
+                        onClick={() => {
+                          setTime(t);
+                          setStep("details");
+                        }}
+                      >
+                        {t}
+                      </ChoiceButton>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Väntelistans CTA (§3.8) */}
+              {fullSlots.length > 0 && !wl.joined && !wl.open && (
+                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] px-4 py-3">
+                  <span className="text-xs text-[var(--w-muted)]">
+                    Önskad tid fullbokad? Vi hör av oss om ett bord blir
+                    ledigt.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setWl((s) => ({
+                        ...s,
+                        open: true,
+                        wish: `${fullSlots[0]}–${plusOneHour(fullSlots[fullSlots.length - 1])}`,
+                        error: null,
+                      }))
+                    }
+                    className="shrink-0 rounded-lg border border-[var(--w-accent)]/50 px-3 py-2 text-xs font-semibold text-[var(--w-accent)] hover:bg-[var(--w-accent)]/10 transition"
+                  >
+                    Ställ mig på väntelistan
+                  </button>
+                </div>
+              )}
+              {wl.open && !wl.joined && party && date && (
+                <div className="mt-4 rounded-xl border border-[var(--w-line)] bg-[var(--w-panel)] p-4">
+                  <p className="text-sm font-semibold">
+                    Väntelista · {wl.wish}
+                  </p>
+                  <p className="mt-0.5 text-xs text-[var(--w-muted)]">
+                    Vi skickar SMS om ett bord för {party}{" "}
+                    {party === 1 ? "gäst" : "gäster"} blir ledigt.
+                  </p>
+                  <div className="mt-3 grid grid-cols-[1fr_1fr_auto] gap-2">
+                    <input
+                      value={wl.name}
+                      onChange={(e) =>
+                        setWl((s) => ({ ...s, name: e.target.value }))
+                      }
+                      placeholder="Namn"
+                      className="w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
+                    />
+                    <input
+                      value={wl.phone}
+                      onChange={(e) =>
+                        setWl((s) => ({ ...s, phone: e.target.value }))
+                      }
+                      placeholder="Mobilnummer"
+                      inputMode="tel"
+                      className="w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        !wl.name.trim() || wl.phone.trim().length < 5
+                      }
                       onClick={() => {
-                        setTime(t);
-                        setStep("details");
+                        const [from, to] = wl.wish.split("–");
+                        void fetch(`/api/widget/${slug}/waitlist`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            name: wl.name.trim(),
+                            phone: wl.phone.trim(),
+                            partySize: party,
+                            date,
+                            wishedFrom: from,
+                            wishedTo: to,
+                          }),
+                        })
+                          .then(async (r) => {
+                            const d = await r.json();
+                            if (!r.ok) {
+                              setWl((s) => ({
+                                ...s,
+                                error: d.error ?? "Kunde inte ställa dig i kö.",
+                              }));
+                              return;
+                            }
+                            setWl((s) => ({ ...s, joined: true, open: false }));
+                          })
+                          .catch(() =>
+                            setWl((s) => ({
+                              ...s,
+                              error: "Kunde inte ställa dig i kö.",
+                            })),
+                          );
                       }}
+                      className="shrink-0 rounded-lg bg-[var(--w-accent)] px-3 py-2 text-xs font-semibold text-[#141210] hover:brightness-110 disabled:opacity-50 transition"
                     >
-                      {t}
-                    </ChoiceButton>
-                  ))}
+                      Ställ mig i kö
+                    </button>
+                  </div>
+                  {wl.error && (
+                    <p className="mt-2 text-xs text-yellow-400">{wl.error}</p>
+                  )}
+                </div>
+              )}
+              {wl.joined && (
+                <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-[var(--w-panel)] px-4 py-3 text-xs font-semibold text-emerald-400">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Du står på väntelistan — vi SMS:ar om ett bord blir ledigt.
+                  Du kan även boka en annan tid ovan.
                 </div>
               )}
             </StepShell>

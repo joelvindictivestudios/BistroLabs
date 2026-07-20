@@ -230,7 +230,7 @@ async function afterStaffCreate(
 ) {
   await logCommunication(bookingId, "RECEIVED", null, { kalla: "personal" });
   if (status === "PENDING") {
-    const sent = await sendCardLink(bookingId, origin);
+    const sent = await sendCardLink(bookingId, origin, { includeSms: true });
     if (!sent.ok) {
       console.error(`Kortlänken gick inte att skicka: ${sent.error}`);
     }

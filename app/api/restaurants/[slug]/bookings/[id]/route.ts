@@ -13,8 +13,11 @@ import { chargeNoShowFee, releaseCard } from "@/lib/payments/psp";
 import { logCommunication, notifyGuest } from "@/lib/messaging/notify";
 import {
   bekraftelseMail,
+  bekraftelseSms,
   andringsnotisMail,
+  andringSms,
   avbokningsbekraftelseMail,
+  avbokningSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 import { buildManageUrl } from "@/lib/booking/manage-token";
@@ -272,7 +275,9 @@ export async function PATCH(
 
     // Återaktivering till PENDING: gästen behöver kortlänken på nytt
     if (reactivate && status === "PENDING") {
-      const sent = await sendCardLink(booking.id, request.nextUrl.origin);
+      const sent = await sendCardLink(booking.id, request.nextUrl.origin, {
+        includeSms: true,
+      });
       if (!sent.ok) {
         console.error(`Kortlänken gick inte att skicka: ${sent.error}`);
       }
@@ -300,6 +305,7 @@ export async function PATCH(
       },
     };
 
+    const smsFrom = config.voiceAgent.phoneNumber || undefined;
     if (
       status === "CONFIRMED" &&
       booking.status === "PENDING" &&
@@ -310,6 +316,8 @@ export async function PATCH(
         guest: booking.guest,
         type: "CONFIRMATION",
         email: bekraftelseMail(mailData),
+        sms: bekraftelseSms(mailData),
+        smsFrom,
       });
       if (emailOk) {
         await prisma.booking.update({
@@ -326,6 +334,8 @@ export async function PATCH(
         guest: booking.guest,
         type: "CHANGE",
         email: andringsnotisMail(mailData),
+        sms: andringSms(mailData),
+        smsFrom,
       });
     }
 
@@ -335,6 +345,8 @@ export async function PATCH(
         guest: booking.guest,
         type: "CANCELLATION_CONFIRMATION",
         email: avbokningsbekraftelseMail(mailData),
+        sms: avbokningSms(mailData),
+        smsFrom,
       });
     }
 

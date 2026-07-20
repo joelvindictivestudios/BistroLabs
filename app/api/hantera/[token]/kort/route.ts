@@ -7,6 +7,7 @@ import { registerCard } from "@/lib/payments/psp";
 import { notifyGuest } from "@/lib/messaging/notify";
 import {
   bekraftelseMail,
+  bekraftelseSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 import { appBaseUrl } from "@/lib/urls";
@@ -90,27 +91,30 @@ export async function POST(
   // Bekräftelsen (mall 1) — engångs via confirmationSentAt, samma gate som
   // personalens Bekräfta-knapp
   const config = parseRestaurantConfig(booking.restaurant.config);
-  if (booking.guest.email && !booking.confirmationSentAt) {
+  if (!booking.confirmationSentAt) {
+    const mailData = {
+      restaurantName: booking.restaurant.name,
+      guestName: booking.guest.name,
+      whenText: formatBookingWhen(booking.startsAt, config.timezone),
+      partySize: booking.partySize,
+      manageUrl: buildManageUrl(
+        appBaseUrl(request.nextUrl.origin),
+        booking.id,
+        booking.endsAt,
+      ),
+      policy: {
+        cancellationWindowHours: config.cancellationWindowHours,
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      },
+    };
     const { emailOk } = await notifyGuest({
       bookingId: booking.id,
       guest: booking.guest,
       type: "CONFIRMATION",
-      email: bekraftelseMail({
-        restaurantName: booking.restaurant.name,
-        guestName: booking.guest.name,
-        whenText: formatBookingWhen(booking.startsAt, config.timezone),
-        partySize: booking.partySize,
-        manageUrl: buildManageUrl(
-          appBaseUrl(request.nextUrl.origin),
-          booking.id,
-          booking.endsAt,
-        ),
-        policy: {
-          cancellationWindowHours: config.cancellationWindowHours,
-          noShowFeePerGuest: config.noShowFeePerGuest,
-          cardGuaranteeRequired: config.cardGuaranteeRequired,
-        },
-      }),
+      email: bekraftelseMail(mailData),
+      sms: bekraftelseSms(mailData),
+      smsFrom: config.voiceAgent.phoneNumber || undefined,
     });
     if (emailOk) {
       await prisma.booking.update({

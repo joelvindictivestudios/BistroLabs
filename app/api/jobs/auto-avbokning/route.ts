@@ -8,6 +8,7 @@ import { cancellationDeadline } from "@/lib/booking/policy";
 import { notifyGuest } from "@/lib/messaging/notify";
 import {
   autoAvbokningMail,
+  autoAvbokningSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 import { appBaseUrl } from "@/lib/urls";
@@ -89,23 +90,26 @@ export async function GET(request: NextRequest) {
     if (res.count === 0) continue; // gästen hann registrera kort
 
     cancelled++;
+    const mailData = {
+      restaurantName: b.restaurant.name,
+      guestName: b.guest.name,
+      whenText: formatBookingWhen(b.startsAt, config.timezone),
+      partySize: b.partySize,
+      manageUrl: "", // används inte i mallen
+      rebookUrl: `${appBaseUrl(request.nextUrl.origin)}/widget/${b.restaurant.slug}`,
+      policy: {
+        cancellationWindowHours: config.cancellationWindowHours,
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      },
+    };
     await notifyGuest({
       bookingId: b.id,
       guest: b.guest,
       type: "AUTO_CANCELLATION",
-      email: autoAvbokningMail({
-        restaurantName: b.restaurant.name,
-        guestName: b.guest.name,
-        whenText: formatBookingWhen(b.startsAt, config.timezone),
-        partySize: b.partySize,
-        manageUrl: "", // används inte i mallen
-        rebookUrl: `${appBaseUrl(request.nextUrl.origin)}/widget/${b.restaurant.slug}`,
-        policy: {
-          cancellationWindowHours: config.cancellationWindowHours,
-          noShowFeePerGuest: config.noShowFeePerGuest,
-          cardGuaranteeRequired: config.cardGuaranteeRequired,
-        },
-      }),
+      email: autoAvbokningMail(mailData),
+      sms: autoAvbokningSms(mailData),
+      smsFrom: config.voiceAgent.phoneNumber || undefined,
     });
   }
 

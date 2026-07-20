@@ -10,7 +10,9 @@ import { appBaseUrl } from "@/lib/urls";
 import { notifyGuest } from "@/lib/messaging/notify";
 import {
   paminnelseMail,
+  paminnelseSms,
   kortPaminnelseMail,
+  kortlankSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 
@@ -69,15 +71,13 @@ export async function GET(request: NextRequest) {
       },
     };
 
+    const deadlineText = `kl ${formatDeadlineTime(
+      cancellationDeadline(booking.startsAt, config),
+      config.timezone,
+    )}`;
     const mail =
       booking.status === "PENDING"
-        ? kortPaminnelseMail({
-            ...data,
-            deadlineText: `kl ${formatDeadlineTime(
-              cancellationDeadline(booking.startsAt, config),
-              config.timezone,
-            )}`,
-          })
+        ? kortPaminnelseMail({ ...data, deadlineText })
         : paminnelseMail({
             ...data,
             timeText: new Intl.DateTimeFormat("sv-SE", {
@@ -92,6 +92,11 @@ export async function GET(request: NextRequest) {
       guest: booking.guest,
       type: "REMINDER",
       email: mail,
+      sms:
+        booking.status === "PENDING"
+          ? kortlankSms({ ...data, deadlineText })
+          : paminnelseSms(data),
+      smsFrom: config.voiceAgent.phoneNumber || undefined,
     });
     if (emailOk) {
       await prisma.booking.update({

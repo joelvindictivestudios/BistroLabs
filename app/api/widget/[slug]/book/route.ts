@@ -11,6 +11,7 @@ import { setInteractionEmbedding } from "@/lib/db/vector";
 import { notifyGuest, logCommunication } from "@/lib/messaging/notify";
 import {
   bekraftelseMail,
+  bekraftelseSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 import { buildManageUrl } from "@/lib/booking/manage-token";
@@ -132,27 +133,30 @@ export async function POST(
     const endsAt = new Date(
       result.startsAt.getTime() + config.bookingDurationMinutes * 60_000,
     );
+    const mailData = {
+      restaurantName: restaurant.name,
+      guestName: body.name ?? guest.name,
+      whenText: formatBookingWhen(result.startsAt, config.timezone),
+      partySize: body.partySize,
+      tableName: result.tableName,
+      manageUrl: buildManageUrl(
+        appBaseUrl(request.nextUrl.origin),
+        result.bookingId,
+        endsAt,
+      ),
+      policy: {
+        cancellationWindowHours: config.cancellationWindowHours,
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      },
+    };
     const { emailOk } = await notifyGuest({
       bookingId: result.bookingId,
       guest: { email: guestEmail, phone: body.phone ?? guest.phone },
       type: "CONFIRMATION",
-      email: bekraftelseMail({
-        restaurantName: restaurant.name,
-        guestName: body.name ?? guest.name,
-        whenText: formatBookingWhen(result.startsAt, config.timezone),
-        partySize: body.partySize,
-        tableName: result.tableName,
-        manageUrl: buildManageUrl(
-          appBaseUrl(request.nextUrl.origin),
-          result.bookingId,
-          endsAt,
-        ),
-        policy: {
-          cancellationWindowHours: config.cancellationWindowHours,
-          noShowFeePerGuest: config.noShowFeePerGuest,
-          cardGuaranteeRequired: config.cardGuaranteeRequired,
-        },
-      }),
+      email: bekraftelseMail(mailData),
+      sms: bekraftelseSms(mailData),
+      smsFrom: config.voiceAgent.phoneNumber || undefined,
     });
     if (emailOk) {
       await prisma.booking.update({

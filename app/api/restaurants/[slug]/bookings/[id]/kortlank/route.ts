@@ -33,7 +33,9 @@ export async function POST(
     return NextResponse.json({ error: "Okänd bokning." }, { status: 404 });
   }
 
-  const sent = await sendCardLink(booking.id, request.nextUrl.origin);
+  const sent = await sendCardLink(booking.id, request.nextUrl.origin, {
+    includeSms: true,
+  });
   if (!sent.ok) {
     return NextResponse.json({ error: sent.error }, { status: 400 });
   }

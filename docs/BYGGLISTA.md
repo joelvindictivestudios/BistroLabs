@@ -73,9 +73,9 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 7 — SMS
 *Beroende: etapp 6.*
 
-- [ ] `sendSms` i `lib/messaging/` via Twilio Messages API — dev-stub utan nycklar, samma mönster som `sendEmail` (§4 sista punkten)
-- [ ] Koppla SMS + mejl på alla gästpåverkande ändringar: bekräftad, ändrad, avbokad (inkl. auto), erbjuden tid från väntelistan (§2 p.6)
-- [ ] Avsändarnummer per restaurang — nuvarande +46767299044 är SMS-only och funkar för detta
+- [x] `sendSms` i `lib/messaging/` via Twilio Messages API — dev-stub utan nycklar, samma mönster som `sendEmail` (§4 sista punkten)
+- [x] Koppla SMS + mejl på alla gästpåverkande ändringar: bekräftad, ändrad, avbokad (inkl. auto), erbjuden tid från väntelistan (§2 p.6)
+- [x] Avsändarnummer per restaurang — nuvarande +46767299044 är SMS-only och funkar för detta
 
 **Klart när:** statusändringar går ut i båda kanalerna när kontaktväg finns.
 

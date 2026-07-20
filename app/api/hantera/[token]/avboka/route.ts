@@ -7,6 +7,7 @@ import { releaseCard } from "@/lib/payments/psp";
 import { notifyGuest } from "@/lib/messaging/notify";
 import {
   avbokningsbekraftelseMail,
+  avbokningSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 import { appBaseUrl } from "@/lib/urls";
@@ -88,22 +89,25 @@ export async function POST(
     noShowFeePerGuest: config.noShowFeePerGuest,
     cardGuaranteeRequired: config.cardGuaranteeRequired,
   };
+  const mailData = {
+    restaurantName: booking.restaurant.name,
+    guestName: booking.guest.name,
+    whenText: formatBookingWhen(booking.startsAt, config.timezone),
+    partySize: booking.partySize,
+    manageUrl: buildManageUrl(
+      appBaseUrl(request.nextUrl.origin),
+      booking.id,
+      booking.endsAt,
+    ),
+    policy,
+  };
   await notifyGuest({
     bookingId: booking.id,
     guest: booking.guest,
     type: "CANCELLATION_CONFIRMATION",
-    email: avbokningsbekraftelseMail({
-      restaurantName: booking.restaurant.name,
-      guestName: booking.guest.name,
-      whenText: formatBookingWhen(booking.startsAt, config.timezone),
-      partySize: booking.partySize,
-      manageUrl: buildManageUrl(
-        appBaseUrl(request.nextUrl.origin),
-        booking.id,
-        booking.endsAt,
-      ),
-      policy,
-    }),
+    email: avbokningsbekraftelseMail(mailData),
+    sms: avbokningSms(mailData),
+    smsFrom: config.voiceAgent.phoneNumber || undefined,
   });
 
   return NextResponse.json({ ok: true });

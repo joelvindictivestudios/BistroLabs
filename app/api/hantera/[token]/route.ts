@@ -12,6 +12,7 @@ import { ALLERGY_CONSENT_TEXT } from "@/lib/booking/consent";
 import { notifyGuest } from "@/lib/messaging/notify";
 import {
   andringsnotisMail,
+  andringSms,
   formatBookingWhen,
 } from "@/lib/messaging/templates";
 import { appBaseUrl } from "@/lib/urls";
@@ -205,23 +206,26 @@ export async function PATCH(
     noShowFeePerGuest: config.noShowFeePerGuest,
     cardGuaranteeRequired: config.cardGuaranteeRequired,
   };
+  const mailData = {
+    restaurantName: booking.restaurant.name,
+    guestName: booking.guest.name,
+    whenText: formatBookingWhen(newStartsAt, config.timezone),
+    partySize: newParty,
+    tableName: newTableName,
+    manageUrl: buildManageUrl(
+      appBaseUrl(request.nextUrl.origin),
+      booking.id,
+      newEndsAt,
+    ),
+    policy,
+  };
   await notifyGuest({
     bookingId: booking.id,
     guest: booking.guest,
     type: "CHANGE",
-    email: andringsnotisMail({
-      restaurantName: booking.restaurant.name,
-      guestName: booking.guest.name,
-      whenText: formatBookingWhen(newStartsAt, config.timezone),
-      partySize: newParty,
-      tableName: newTableName,
-      manageUrl: buildManageUrl(
-        appBaseUrl(request.nextUrl.origin),
-        booking.id,
-        newEndsAt,
-      ),
-      policy,
-    }),
+    email: andringsnotisMail(mailData),
+    sms: andringSms(mailData),
+    smsFrom: config.voiceAgent.phoneNumber || undefined,
   });
 
   return NextResponse.json({

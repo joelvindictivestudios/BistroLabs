@@ -30,6 +30,17 @@ const patchSchema = z.object({
     .regex(/^\d{2}:\d{2}$/)
     .nullable()
     .optional(),
+  noShowFeePerGuest: z.number().int().min(0).max(10_000).optional(),
+  cancellationWindowHours: z.number().int().min(1).max(72).optional(),
+  cardGuaranteeRequired: z.boolean().optional(),
+  eventDates: z
+    .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+    .max(100)
+    .optional(),
+  depositDates: z
+    .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+    .max(100)
+    .optional(),
   voiceAgent: z
     .object({
       voice: z.string().max(30),
@@ -101,6 +112,21 @@ export async function PATCH(
     config.bookingStopDates = body.bookingStopDates;
   if (body.sameDayCutoff !== undefined)
     config.sameDayCutoff = body.sameDayCutoff;
+  if (body.noShowFeePerGuest !== undefined)
+    config.noShowFeePerGuest = body.noShowFeePerGuest;
+  if (body.cancellationWindowHours !== undefined)
+    config.cancellationWindowHours = body.cancellationWindowHours;
+  if (body.cardGuaranteeRequired !== undefined) {
+    // Stämpla referenspunkten för rapporternas före/efter när kravet slås PÅ
+    if (body.cardGuaranteeRequired && !config.cardGuaranteeRequired) {
+      config.cardGuaranteeSince = new Intl.DateTimeFormat("sv-SE", {
+        timeZone: config.timezone,
+      }).format(new Date());
+    }
+    config.cardGuaranteeRequired = body.cardGuaranteeRequired;
+  }
+  if (body.eventDates !== undefined) config.eventDates = body.eventDates;
+  if (body.depositDates !== undefined) config.depositDates = body.depositDates;
   if (body.voiceAgent !== undefined) {
     // phoneNumber/phoneSid skrivs ENDAST av phone-number-endpointen
     config.voiceAgent = { ...config.voiceAgent, ...body.voiceAgent };

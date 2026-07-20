@@ -43,6 +43,9 @@ type Props = {
   initialSameDayCutoff: string | null;
   initialEscalationPartySize: number;
   initialTheme: Theme;
+  initialNoShowFeePerGuest: number;
+  initialCancellationWindowHours: number;
+  initialCardGuaranteeRequired: boolean;
 };
 
 export function SettingsClient({
@@ -52,6 +55,9 @@ export function SettingsClient({
   initialSameDayCutoff,
   initialEscalationPartySize,
   initialTheme,
+  initialNoShowFeePerGuest,
+  initialCancellationWindowHours,
+  initialCardGuaranteeRequired,
 }: Props) {
   const router = useRouter();
   const [name, setName] = useState(initialName);
@@ -61,6 +67,13 @@ export function SettingsClient({
   );
   const [cutoff, setCutoff] = useState(initialSameDayCutoff ?? "14:00");
   const [maxParty, setMaxParty] = useState(initialEscalationPartySize);
+  const [noShowFee, setNoShowFee] = useState(initialNoShowFeePerGuest);
+  const [cancelWindow, setCancelWindow] = useState(
+    initialCancellationWindowHours,
+  );
+  const [cardRequired, setCardRequired] = useState(
+    initialCardGuaranteeRequired,
+  );
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [savedTheme, setSavedTheme] = useState<Theme>(initialTheme);
   const [saving, setSaving] = useState(false);
@@ -102,6 +115,9 @@ export function SettingsClient({
           sameDayCutoff: cutoffEnabled ? cutoff : null,
           escalationPartySize: maxParty,
           theme,
+          noShowFeePerGuest: noShowFee,
+          cancellationWindowHours: cancelWindow,
+          cardGuaranteeRequired: cardRequired,
         }),
       });
       if (!res.ok) {
@@ -259,6 +275,65 @@ export function SettingsClient({
               className={`${inputClass} w-24 font-mono`}
             />
           </label>
+        </div>
+      </section>
+
+      <section>
+        <h2 className={labelClass}>No-show-skydd</h2>
+        <div className="mt-4 space-y-5">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={cardRequired}
+              onChange={(e) => setCardRequired(e.target.checked)}
+              className="accent-[var(--w-accent)]"
+            />
+            Kräv kort som garanti vid onlinebokning
+          </label>
+          <p className="text-xs text-[var(--w-muted)]">
+            Gästen anger kort som garanti — inget dras vid bokning. Utan kravet
+            bokas gäster bekräftat direkt och ingen no-show-avgift kan
+            debiteras.
+          </p>
+          <label className="block text-sm">
+            <span className="text-xs text-[var(--w-muted)]">
+              Avgift vid no-show (kr per gäst)
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={10000}
+              step={50}
+              value={noShowFee}
+              onChange={(e) =>
+                setNoShowFee(
+                  Math.min(10000, Math.max(0, Number(e.target.value) || 0)),
+                )
+              }
+              className={`${inputClass} w-24 font-mono`}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-xs text-[var(--w-muted)]">
+              Kostnadsfri avbokning/ändring fram till (timmar före ankomst)
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={72}
+              value={cancelWindow}
+              onChange={(e) =>
+                setCancelWindow(
+                  Math.min(72, Math.max(1, Number(e.target.value) || 1)),
+                )
+              }
+              className={`${inputClass} w-24 font-mono`}
+            />
+          </label>
+          <p className="text-xs text-[var(--w-muted)]">
+            Samma gräns styr auto-avbokningen av preliminära bokningar utan
+            kort — en inställning, två användningar.
+          </p>
         </div>
       </section>
     </div>

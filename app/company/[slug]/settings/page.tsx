@@ -29,6 +29,9 @@ export default async function SettingsPage({
       initialSameDayCutoff={config.sameDayCutoff}
       initialEscalationPartySize={config.escalationPartySize}
       initialTheme={config.theme}
+      initialNoShowFeePerGuest={config.noShowFeePerGuest}
+      initialCancellationWindowHours={config.cancellationWindowHours}
+      initialCardGuaranteeRequired={config.cardGuaranteeRequired}
     />
   );
 }

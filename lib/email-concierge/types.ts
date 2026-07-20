@@ -49,6 +49,23 @@ export const restaurantConfigSchema = z.object({
   bookingStopDates: z.array(z.string()).default([]),
   /** Klockslag (HH:MM) efter vilket gäster inte kan boka för samma dag. null = av. */
   sameDayCutoff: z.string().nullable().default("14:00"),
+  /** No-show-avgift i kr per gäst i sällskapet (§2 p.1). */
+  noShowFeePerGuest: z.number().int().min(0).max(10_000).default(250),
+  /**
+   * Ett fönster, två användningar (§2b p.2): styr BÅDE fri avbokning/ändring
+   * OCH auto-avbokningsdeadline för preliminära bokningar. Deadline beräknas
+   * alltid vid läsning (startsAt − fönster), lagras aldrig. max(72) gör
+   * auto-avbokningsjobbets SQL-förfilter (startsAt <= now + 72h) bevisbart säkert.
+   */
+  cancellationWindowHours: z.number().int().min(1).max(72).default(4),
+  /** false → widgeten hoppar över kortsteget och bokar bekräftat direkt; no-show kan då bara markeras utan avgift. */
+  cardGuaranteeRequired: z.boolean().default(true),
+  /** YYYY-MM-DD när kortgarantin senast slogs på — referenspunkt för rapporternas före/efter. */
+  cardGuaranteeSince: z.string().nullable().default(null),
+  /** Eventdagar (YYYY-MM-DD): visas som händelse — blockerar inget (§3.11). */
+  eventDates: z.array(z.string()).default([]),
+  /** Depositionsdagar (YYYY-MM-DD): förbokning med avgift — endast listning, flödet är utanför scope (§3.11, §4). */
+  depositDates: z.array(z.string()).default([]),
   /** Personalvyernas tema: classic = ursprungliga mörkgrön/guld, warm = GPG-terrakotta, light = ljus. */
   theme: z.enum(["classic", "warm", "light"]).default("classic"),
   /** Gästwidgetens tema — oberoende av personalvyn. */

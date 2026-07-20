@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Avatar } from "@/app/components/avatar";
 import type { CustomerRow } from "./customers-client";
 
-// Gästprofilen (§3.12): stat-tiles (besök / no-shows / senaste besök),
+// Gästprofilen (§3.12) — innehållet i höger-curtainen (POC:ns gästpanel):
+// avatar + kontakt, stat-tiles (besök / no-shows / bokningar / senast),
 // märkningar (allergi/stamgäst/barnfamilj) och händelsehistorik ur
-// bokningarna — no-show-räknaren beräknas vid läsning, aldrig denormaliserad.
+// bokningarna. No-show-räknaren beräknas vid läsning, aldrig denormaliserad.
 
 const TAGS = [
   { key: "allergi", label: "Allergi" },
@@ -49,12 +51,10 @@ export function CustomerProfile({
   slug,
   guest,
   onEdit,
-  onClose,
 }: {
   slug: string;
   guest: CustomerRow;
   onEdit: () => void;
-  onClose: () => void;
 }) {
   const [tags, setTags] = useState<string[]>(guest.tags ?? []);
   const [noShowCount, setNoShowCount] = useState(guest.noShowCount ?? 0);
@@ -117,37 +117,35 @@ export function CustomerProfile({
       month: "short",
     });
 
+  const name = guest.name ?? guest.email ?? guest.phone ?? "Gäst";
+
   return (
-    <div className="rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
-            Gästprofil
+    <div>
+      {/* Identitet — POC:ns panelhuvud */}
+      <div className="flex items-center gap-3.5">
+        <Avatar name={name} size={48} />
+        <div className="min-w-0">
+          <p className="truncate text-lg font-semibold leading-tight [font-family:var(--font-display),sans-serif]">
+            {name}
           </p>
-          <h2 className="mt-1 text-lg font-semibold">
-            {guest.name ?? guest.email ?? guest.phone ?? "Gäst"}
-          </h2>
+          <p className="truncate text-[13px] text-[var(--w-muted)]">
+            {guest.phone ?? guest.email ?? "—"}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {saved && !error && (
-            <span className="text-xs text-emerald-400">Sparat ✓</span>
-          )}
-          <button
-            onClick={onClose}
-            aria-label="Stäng profilen"
-            className="rounded-lg p-1.5 text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
-          >
-            ✕
-          </button>
-        </div>
+        {saved && !error && (
+          <span className="ml-auto shrink-0 text-xs text-emerald-400">
+            Sparat ✓
+          </span>
+        )}
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <div className="rounded-xl bg-[var(--w-bg)] p-3">
+      {/* Stat-tiles 2×2 */}
+      <div className="mt-5 grid grid-cols-2 gap-2.5">
+        <div className="rounded-xl bg-[var(--w-bg)] px-3.5 py-3">
           <p className="text-xs text-[var(--w-muted)]">Besök</p>
           <p className="mt-0.5 text-lg font-bold">{guest.visitCount}</p>
         </div>
-        <div className="rounded-xl bg-[var(--w-bg)] p-3">
+        <div className="rounded-xl bg-[var(--w-bg)] px-3.5 py-3">
           <p className="text-xs text-[var(--w-muted)]">No-shows</p>
           <p
             className={`mt-0.5 text-lg font-bold ${
@@ -157,15 +155,20 @@ export function CustomerProfile({
             {noShowCount}
           </p>
         </div>
-        <div className="rounded-xl bg-[var(--w-bg)] p-3">
-          <p className="text-xs text-[var(--w-muted)]">Senaste besök</p>
+        <div className="rounded-xl bg-[var(--w-bg)] px-3.5 py-3">
+          <p className="text-xs text-[var(--w-muted)]">Bokningar</p>
+          <p className="mt-0.5 text-lg font-bold">{guest.bookingCount}</p>
+        </div>
+        <div className="rounded-xl bg-[var(--w-bg)] px-3.5 py-3">
+          <p className="text-xs text-[var(--w-muted)]">Senast</p>
           <p className="mt-0.5 text-lg font-bold">
             {lastVisit ? dateLabel(lastVisit) : "—"}
           </p>
         </div>
       </div>
 
-      <div className="mt-4">
+      {/* Märkningar */}
+      <div className="mt-5">
         <p className="text-xs text-[var(--w-muted)]">Märkning</p>
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {TAGS.map((t) => (
@@ -185,7 +188,8 @@ export function CustomerProfile({
         </div>
       </div>
 
-      <div className="mt-4">
+      {/* Historik */}
+      <div className="mt-5">
         <p className="text-xs text-[var(--w-muted)]">Historik</p>
         {history === null && !error && (
           <p className="mt-1.5 text-xs text-[var(--w-muted)]">Hämtar…</p>
@@ -197,11 +201,11 @@ export function CustomerProfile({
           </p>
         )}
         {history && history.length > 0 && (
-          <div className="mt-1.5 divide-y divide-[var(--w-line)]/60">
+          <div className="mt-1 divide-y divide-[var(--w-line)]/60">
             {history.map((h) => (
               <div
                 key={h.id}
-                className="flex items-center justify-between gap-3 py-2 text-sm"
+                className="flex items-center justify-between gap-3 py-2 text-[13.5px]"
               >
                 <span
                   className={
@@ -221,7 +225,7 @@ export function CustomerProfile({
 
       <button
         onClick={onEdit}
-        className="mt-4 h-10 rounded-xl border border-[var(--w-line)] px-4 text-sm text-[var(--w-muted)] hover:border-[var(--w-accent)] hover:text-[var(--w-ink)] transition"
+        className="mt-6 h-10 w-full rounded-xl border border-[var(--w-line)] text-sm text-[var(--w-muted)] hover:border-[var(--w-accent)] hover:text-[var(--w-ink)] transition"
       >
         Redigera uppgifter
       </button>

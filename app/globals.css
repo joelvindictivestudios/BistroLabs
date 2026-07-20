@@ -83,6 +83,19 @@
 
 @theme {
   --animate-wiggle: wiggle 0.45s ease-in-out;
+  /* Gästprofilens curtain (POC:ns gpgDrawer): glider in från höger */
+  --animate-drawer-in: drawer-in 0.22s ease;
+
+  @keyframes drawer-in {
+    from {
+      transform: translateX(24px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
 
   @keyframes wiggle {
     0%,

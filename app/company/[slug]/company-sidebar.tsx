@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  DashboardSquare01Icon,
+  DashboardSquare03Icon,
   Calendar03Icon,
   UserGroupIcon,
   ChartHistogramIcon,
@@ -37,13 +37,13 @@ type NavItem = {
 };
 
 const MAIN: readonly NavItem[] = [
-  { href: "", label: "Översikt", icon: DashboardSquare01Icon },
+  { href: "", label: "Översikt", icon: DashboardSquare03Icon },
   { href: "/bookings", label: "Bokningar", icon: Calendar03Icon },
   { href: "customers", label: "Gäster", icon: UserGroupIcon },
-  { href: "rapporter", label: "Rapporter", icon: ChartHistogramIcon },
   { href: "floor", label: "Bordskarta", icon: Table02Icon },
   { href: "hours", label: "Öppettider", icon: Clock01Icon },
   { href: "inbox", label: "AI-inkorg", icon: AiMail01Icon },
+  { href: "rapporter", label: "Rapporter", icon: ChartHistogramIcon },
   { href: "settings", label: "Inställningar", icon: Settings01Icon },
 ] as const;
 

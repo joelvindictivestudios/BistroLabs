@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
-import { adminTheme } from "@/lib/theme";
 import { BookingsClient } from "./bookings-client";
 
 export const metadata = { title: "Bokningar — BistroLabs" };
@@ -23,19 +22,18 @@ export default async function BookingsPage({
 
   const config = parseRestaurantConfig(restaurant.config);
 
+  // Temat sätts av adminskalet (layout.tsx → AdminShell)
   return (
-    <div data-theme={adminTheme(config).dataTheme}>
-      <BookingsClient
-        slug={slug}
-        restaurantId={restaurant.id}
-        restaurantName={restaurant.name}
-        openingHours={config.openingHours}
-        policy={{
-          noShowFeePerGuest: config.noShowFeePerGuest,
-          cancellationWindowHours: config.cancellationWindowHours,
-          cardGuaranteeRequired: config.cardGuaranteeRequired,
-        }}
-      />
-    </div>
+    <BookingsClient
+      slug={slug}
+      restaurantId={restaurant.id}
+      restaurantName={restaurant.name}
+      openingHours={config.openingHours}
+      policy={{
+        noShowFeePerGuest: config.noShowFeePerGuest,
+        cancellationWindowHours: config.cancellationWindowHours,
+        cardGuaranteeRequired: config.cardGuaranteeRequired,
+      }}
+    />
   );
 }

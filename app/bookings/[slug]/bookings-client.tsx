@@ -1,10 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { getBrowserSupabase } from "@/lib/auth/client";
 import { Avatar } from "@/app/components/avatar";
-import { BrandLogo } from "@/app/components/brand-logo";
 import {
   GRID_W,
   GRID_H,
@@ -541,17 +539,9 @@ export function BookingsClient({
     });
 
   return (
-    <div className="min-h-dvh bg-[var(--w-bg)] text-[var(--w-ink)]">
+    <div className="min-h-full bg-[var(--w-bg)] text-[var(--w-ink)]">
+      {/* Verktygsrad — identitet/navigation bor i adminskalets toppbar + sidomeny */}
       <header className="flex h-16 items-center gap-4 border-b border-[var(--w-line)] px-6">
-        <Link href={`/dashboard/${slug}`} aria-label="Till översikten">
-          <BrandLogo />
-        </Link>
-        <Link
-          href={`/dashboard/${slug}`}
-          className="text-xs mt-2 text-[var(--w-muted)] hover:text-[var(--w-ink)] transition-colors"
-        >
-          ‹ Översikt
-        </Link>
         <span
           className={`mt-2 flex items-center gap-1.5 text-[11px] ${live ? "text-status-seated-fg" : "text-[var(--w-muted)]"}`}
           title={live ? "Realtidsuppdatering aktiv" : "Ansluter…"}

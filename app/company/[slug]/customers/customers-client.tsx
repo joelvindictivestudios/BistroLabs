@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Search01Icon, UserAdd01Icon } from "@hugeicons/core-free-icons";
+import { Avatar } from "@/app/components/avatar";
 import { CustomerProfile } from "./customer-profile";
 
 // Kundregistret: sök, skapa, redigera, importera (CSV) och radera kunder.
@@ -38,10 +39,14 @@ export function CustomersClient({ slug, initialGuests }: Props) {
   const [guests, setGuests] = useState<CustomerRow[]>(initialGuests);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState<CustomerRow | null>(null);
-  // Gästprofilen (§3.12): radklick öppnar panelen med historik + märkningar
-  const [viewing, setViewing] = useState<CustomerRow | null>(null);
+  // Curtain-panelen till höger (POC:ns gästpanel): radklick → profil,
+  // "Redigera uppgifter" → formulär i samma panel, "Ny gäst" → tomt formulär
+  const [drawer, setDrawer] = useState<
+    | { mode: "profile"; guest: CustomerRow }
+    | { mode: "edit"; guest: CustomerRow }
+    | { mode: "create" }
+    | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
@@ -124,10 +129,7 @@ export function CustomersClient({ slug, initialGuests }: Props) {
             {importing ? "Importerar…" : "Importera CSV"}
           </button>
           <button
-            onClick={() => {
-              setShowForm((v) => !v);
-              setEditing(null);
-            }}
+            onClick={() => setDrawer({ mode: "create" })}
             className="flex h-10 items-center gap-2 rounded-xl bg-[var(--w-accent)] px-4 text-sm font-semibold text-accent-on shadow-lg shadow-black/25 hover:brightness-110 transition"
           >
             <HugeiconsIcon icon={UserAdd01Icon} size={18} strokeWidth={1.8} />
@@ -165,45 +167,6 @@ export function CustomersClient({ slug, initialGuests }: Props) {
         </div>
       )}
 
-      {viewing && !editing && !showForm && (
-        <CustomerProfile
-          slug={slug}
-          guest={viewing}
-          onEdit={() => {
-            setEditing(viewing);
-            setViewing(null);
-          }}
-          onClose={() => setViewing(null)}
-        />
-      )}
-
-      {(showForm || editing) && (
-        <CustomerForm
-          slug={slug}
-          existing={editing}
-          onDone={(saved) => {
-            if (editing) {
-              setGuests((gs) =>
-                gs.map((g) => (g.id === saved.id ? saved : g)),
-              );
-            } else {
-              setGuests((gs) => [saved, ...gs]);
-            }
-            setShowForm(false);
-            setEditing(null);
-          }}
-          onDeleted={(id) => {
-            setGuests((gs) => gs.filter((g) => g.id !== id));
-            setShowForm(false);
-            setEditing(null);
-          }}
-          onCancel={() => {
-            setShowForm(false);
-            setEditing(null);
-          }}
-        />
-      )}
-
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <HugeiconsIcon
@@ -231,90 +194,177 @@ export function CustomersClient({ slug, initialGuests }: Props) {
         </button>
       </div>
 
+      {/* Gästtabellen (POC:ns anatomi): avatar + namn, mono-telefon,
+          besök med no-show-suffix, senaste besök och märkningschips.
+          Radklick öppnar curtain-panelen — redigering sker där. */}
       <div className="overflow-x-auto rounded-2xl border border-[var(--w-line)]">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-[var(--w-line)] text-left text-[11px] uppercase tracking-wider text-[var(--w-muted)]">
-              <th className="px-4 py-3 font-medium">Namn</th>
-              <th className="px-4 py-3 font-medium">Kontakt</th>
-              <th className="px-4 py-3 font-medium">Bokningar</th>
-              <th className="px-4 py-3 font-medium">Upplysningar</th>
-              <th className="px-4 py-3" />
+            <tr className="border-b border-[var(--w-line)] bg-[var(--w-bg)] text-left text-[11px] uppercase tracking-[0.14em] text-[var(--w-muted)]">
+              <th className="px-5 py-3.5 font-semibold">Gäst</th>
+              <th className="px-4 py-3.5 font-semibold">Telefon</th>
+              <th className="px-4 py-3.5 font-semibold">Besök</th>
+              <th className="px-4 py-3.5 font-semibold">Senast</th>
+              <th className="px-4 py-3.5 font-semibold">Märkning</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--w-line)]">
             {guests.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-[var(--w-muted)]">
+                <td colSpan={5} className="px-5 py-6 text-[var(--w-muted)]">
                   Inga gäster {query ? "matchade sökningen" : "ännu"}.
                 </td>
               </tr>
             )}
-            {guests.map((g) => (
-              <tr
-                key={g.id}
-                onClick={() => {
-                  setViewing(g);
-                  setEditing(null);
-                  setShowForm(false);
-                }}
-                className="cursor-pointer hover:bg-[var(--w-panel)]/60"
-              >
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span>{g.name ?? "—"}</span>
-                    {(g.tags ?? []).map((t) => (
-                      <span
-                        key={t}
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize ${
-                          t === "allergi"
-                            ? "border-status-late-border bg-status-late-bg text-status-late-fg"
-                            : t === "stamgäst"
-                              ? "border-status-booked-border bg-status-booked-bg text-status-booked-fg"
-                              : "border-status-pending-border bg-status-pending-bg text-status-pending-fg"
-                        }`}
-                      >
-                        {t}
+            {guests.map((g) => {
+              const name = g.name ?? g.email ?? g.phone ?? "Gäst";
+              const selected =
+                drawer !== null &&
+                drawer.mode !== "create" &&
+                drawer.guest.id === g.id;
+              return (
+                <tr
+                  key={g.id}
+                  onClick={() => setDrawer({ mode: "profile", guest: g })}
+                  aria-selected={selected}
+                  className={`cursor-pointer transition-colors ${
+                    selected
+                      ? "bg-[var(--w-accent)]/5"
+                      : "hover:bg-[var(--w-panel)]/60"
+                  }`}
+                >
+                  <td className="px-5 py-3.5">
+                    <div className="flex items-center gap-3">
+                      <Avatar name={name} size={36} />
+                      <span className="font-semibold">{name}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3.5 font-mono text-[13px] text-[var(--w-muted)]">
+                    {g.phone ?? "—"}
+                  </td>
+                  <td className="px-4 py-3.5">
+                    {g.visitCount}
+                    {(g.noShowCount ?? 0) > 0 && (
+                      <span className="ml-1.5 text-xs font-semibold text-status-late-fg">
+                        · {g.noShowCount} no-show
+                        {(g.noShowCount ?? 0) === 1 ? "" : "s"}
                       </span>
-                    ))}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-xs">
-                  <div>{g.email ?? ""}</div>
-                  <div className="font-mono text-[var(--w-muted)]">
-                    {g.phone ?? ""}
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  {g.bookingCount}
-                  {(g.noShowCount ?? 0) > 0 && (
-                    <span className="ml-1.5 text-xs font-semibold text-status-late-fg">
-                      · {g.noShowCount} no-show
-                      {(g.noShowCount ?? 0) === 1 ? "" : "s"}
-                    </span>
-                  )}
-                </td>
-                <td className="max-w-56 truncate px-4 py-3 text-xs text-[var(--w-muted)]">
-                  {g.notes || "—"}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditing(g);
-                      setShowForm(false);
-                      setViewing(null);
-                    }}
-                    className="rounded-lg border border-[var(--w-line)] px-3 py-1 text-xs text-[var(--w-muted)] hover:border-[var(--w-accent)] hover:text-[var(--w-ink)] transition"
-                  >
-                    Redigera
-                  </button>
-                </td>
-              </tr>
-            ))}
+                    )}
+                  </td>
+                  <td className="px-4 py-3.5 text-[var(--w-muted)]">
+                    {g.lastVisit
+                      ? new Date(g.lastVisit).toLocaleDateString("sv-SE", {
+                          day: "numeric",
+                          month: "short",
+                        })
+                      : "—"}
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <div className="flex flex-wrap gap-1.5">
+                      {(g.tags ?? []).map((t) => (
+                        <span
+                          key={t}
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize ${
+                            t === "allergi"
+                              ? "border-status-late-border bg-status-late-bg text-status-late-fg"
+                              : t === "stamgäst"
+                                ? "border-status-booked-border bg-status-booked-bg text-status-booked-fg"
+                                : "border-status-pending-border bg-status-pending-bg text-status-pending-fg"
+                          }`}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      {/* Curtain-panelen (POC:ns gpgDrawer): glider in från höger, ingen
+          scrim — tabellen förblir klickbar så man kan bläddra mellan gäster */}
+      {drawer && (
+        <aside
+          key={
+            drawer.mode === "create"
+              ? "create"
+              : `${drawer.mode}-${drawer.guest.id}`
+          }
+          role="dialog"
+          aria-label={
+            drawer.mode === "profile"
+              ? "Gästprofil"
+              : drawer.mode === "edit"
+                ? "Redigera gäst"
+                : "Ny gäst"
+          }
+          className="fixed inset-y-0 right-0 z-40 w-[380px] max-w-[92vw] overflow-y-auto border-l border-[var(--w-line)] bg-[var(--w-panel)] shadow-2xl motion-safe:animate-drawer-in"
+        >
+          <div className="flex items-center justify-between border-b border-[var(--w-line)] px-5 py-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
+              {drawer.mode === "profile"
+                ? "Gästprofil"
+                : drawer.mode === "edit"
+                  ? "Redigera gäst"
+                  : "Ny gäst"}
+            </p>
+            <button
+              onClick={() => setDrawer(null)}
+              aria-label="Stäng panelen"
+              className="rounded-lg p-1.5 text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="px-5 py-5">
+            {drawer.mode === "profile" && (
+              <CustomerProfile
+                slug={slug}
+                guest={drawer.guest}
+                onEdit={() => setDrawer({ mode: "edit", guest: drawer.guest })}
+              />
+            )}
+            {(drawer.mode === "edit" || drawer.mode === "create") && (
+              <CustomerForm
+                slug={slug}
+                existing={drawer.mode === "edit" ? drawer.guest : null}
+                onDone={(saved) => {
+                  setGuests((gs) =>
+                    drawer.mode === "edit"
+                      ? gs.map((g) => (g.id === saved.id ? saved : g))
+                      : [saved, ...gs],
+                  );
+                  setDrawer({ mode: "profile", guest: saved });
+                }}
+                onDeleted={(id) => {
+                  setGuests((gs) => gs.filter((g) => g.id !== id));
+                  setDrawer(null);
+                }}
+                onCancel={() =>
+                  setDrawer(
+                    drawer.mode === "edit"
+                      ? { mode: "profile", guest: drawer.guest }
+                      : null,
+                  )
+                }
+              />
+            )}
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
@@ -423,12 +473,10 @@ export function CustomerForm({
   const inputClass =
     "w-full bg-transparent border-b border-[var(--w-line)] py-2 text-sm placeholder:text-[var(--w-muted)]/60 focus:border-[var(--w-accent)] focus:outline-none";
 
+  // Renderas i curtain-panelen — rubrik och kortchrome kommer därifrån
   return (
-    <div className="rounded-2xl border border-[var(--w-line)] bg-[var(--w-panel)] p-5">
-      <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--w-muted)]">
-        {existing ? "Redigera gäst" : "Ny gäst"}
-      </p>
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+    <div>
+      <div className="grid gap-4">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -476,7 +524,7 @@ export function CustomerForm({
         E-post eller telefonnummer krävs.
       </p>
       {error && <p className="mt-2 text-xs text-yellow-400">{error}</p>}
-      <div className="mt-4 flex items-center gap-2">
+      <div className="mt-5 flex flex-wrap items-center gap-2">
         {existing &&
           (deleteArmed ? (
             <span className="flex items-center gap-2 rounded-xl border border-status-late-border bg-status-late-bg px-3 py-1.5">

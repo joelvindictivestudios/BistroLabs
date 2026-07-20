@@ -29,7 +29,7 @@ const STATUS_PILLS: Record<
   { label: string; className: string }
 > = {
   PENDING: {
-    label: "Väntar",
+    label: "Preliminär",
     className: "bg-status-pending-bg text-status-pending-fg",
   },
   CONFIRMED: {

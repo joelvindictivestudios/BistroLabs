@@ -8,6 +8,8 @@ import {
 } from "@/lib/booking/availability";
 import { parseRestaurantConfig } from "@/lib/email-concierge/types";
 import { sendEmail } from "@/lib/messaging/send";
+import { Prisma } from "@/lib/generated/prisma/client";
+import { sendCardLink } from "@/lib/messaging/card-link";
 
 const patchSchema = z
   .object({
@@ -20,6 +22,8 @@ const patchSchema = z
     staffNote: z.string().max(500).nullable().optional(),
     /** Valfri orsak vid avbokning — loggas i cancelInfo (§1). */
     cancelReason: z.string().max(200).optional(),
+    /** Återaktivera avbokad bokning (§3.5): → CONFIRMED om kort finns, annars PENDING. */
+    reactivate: z.boolean().optional(),
     // Tidsändring: date+time (lokal restaurangtid); endTime valfri —
     // annars start + bookingDurationMinutes
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -37,6 +41,9 @@ const patchSchema = z
   })
   .refine((d) => d.cancelReason === undefined || d.status === "CANCELLED", {
     message: "cancelReason kräver status CANCELLED.",
+  })
+  .refine((d) => !d.reactivate || d.status === undefined, {
+    message: "reactivate kombineras inte med status — målstatus avgörs av kortet.",
   });
 
 // PATCH /api/restaurants/{slug}/bookings/{id} — personalens verktyg i dagvyn:
@@ -79,15 +86,31 @@ export async function PATCH(
   }
   const {
     tableId,
-    status,
+    status: requestedStatus,
     guestId,
     arrivedCount,
     staffNote,
     cancelReason,
+    reactivate,
     date,
     time,
     endTime,
   } = parsed.data;
+
+  // Återaktivering (§3.5): endast från CANCELLED; kort kvar → CONFIRMED,
+  // annars PENDING (kortlänken skickas på nytt nedan). Bordet kan ha hunnit
+  // bokas — exclusion-constrainten ger 409 med flytta-först-instruktion.
+  if (reactivate && booking.status !== "CANCELLED") {
+    return NextResponse.json(
+      { error: "Endast avbokade bokningar kan återaktiveras." },
+      { status: 400 },
+    );
+  }
+  const status = reactivate
+    ? booking.cardPspToken
+      ? ("CONFIRMED" as const)
+      : ("PENDING" as const)
+    : requestedStatus;
 
   if (guestId !== undefined) {
     const guest = await prisma.guest.findFirst({
@@ -161,6 +184,7 @@ export async function PATCH(
             },
           }
         : {}),
+      ...(reactivate ? { cancelInfo: Prisma.DbNull } : {}),
     };
 
     const updated = completing
@@ -187,6 +211,14 @@ export async function PATCH(
           data,
           include: { table: { select: { name: true } } },
         });
+
+    // Återaktivering till PENDING: gästen behöver kortlänken på nytt
+    if (reactivate && status === "PENDING") {
+      const sent = await sendCardLink(booking.id, request.nextUrl.origin);
+      if (!sent.ok) {
+        console.error(`Kortlänken gick inte att skicka: ${sent.error}`);
+      }
+    }
 
     // Bekräftelsemejl vid Bekräfta (PENDING → CONFIRMED) — best-effort,
     // skickas bara en gång per bokning
@@ -236,9 +268,11 @@ export async function PATCH(
     if (isOverlapViolation(e)) {
       return NextResponse.json(
         {
-          error: newTimes
-            ? "Bordet är upptaget den tiden — välj en annan tid eller flytta bordet först."
-            : "Bordet är upptaget den tiden — välj ett annat bord.",
+          error: reactivate
+            ? "Bordet har hunnit bokas — flytta bokningen till en annan tid eller ett annat bord först."
+            : newTimes
+              ? "Bordet är upptaget den tiden — välj en annan tid eller flytta bordet först."
+              : "Bordet är upptaget den tiden — välj ett annat bord.",
         },
         { status: 409 },
       );

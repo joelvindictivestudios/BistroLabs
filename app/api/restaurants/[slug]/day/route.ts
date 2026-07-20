@@ -50,6 +50,7 @@ export async function GET(
     orderBy: { startsAt: "asc" },
     include: {
       guest: { select: { name: true, email: true, phone: true } },
+      commLogs: { orderBy: { sentAt: "asc" } },
     },
   });
 
@@ -83,6 +84,18 @@ export async function GET(
       staffNote: b.staffNote,
       allergyNote: b.allergyNote,
       guestName: b.guest.name ?? b.guest.email ?? b.guest.phone ?? "Gäst",
+      guestEmail: b.guest.email,
+      guestPhone: b.guest.phone,
+      cardLast4: b.cardLast4,
+      charged: b.charged === null ? null : Number(b.charged),
+      cancelInfo: b.cancelInfo,
+      commLog: b.commLogs.map((c) => ({
+        id: c.id,
+        type: c.type,
+        channel: c.channel,
+        at: c.sentAt.toISOString(),
+        meta: c.meta,
+      })),
     })),
   });
 }

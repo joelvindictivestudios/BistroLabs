@@ -32,11 +32,11 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 3 — Preliminärflödet
 *Beroende: etapp 1 + 2.*
 
-- [ ] "Ny bokning": statusval **Preliminär** (default) / **Bekräftad** + e-postfält; infotext vid Bekräftad att ingen no-show-avgift kan debiteras utan kort (§3.2)
-- [ ] PENDING-semantiken utökas till "väntar på kortbekräftelse" — badge-label ändras från "Väntar" till "Preliminär"; AI-mejlflödets användning och Bekräfta-knappen behålls (§3.3)
-- [ ] Utskicksmall 2 **Kortlänk**: förklarar garantin, inget dras nu, auto-avbokning utan kort; CTA "Ange kort och bekräfta" (§3.7)
-- [ ] Kortsida via hanteringslänken: kortnummer (minst 12 siffror aktiverar knappen), giltighet, CVC mot PSP-stubben; spara `cardLast4`; auto-bekräfta → `CONFIRMED` + bekräftelsemejl (§2 p.2, §3.1 kortsteget)
-- [ ] Gul panel i bokningsdetaljen: "Väntar på kortbekräftelse" + beräknad deadline ("avbokas automatiskt kl HH:MM — X tim före") + knappen **"Skicka kortlänken igen"** (§3.3). Deadline beräknas vid rendering, lagras aldrig (§2b p.3)
+- [x] "Ny bokning": statusval **Preliminär** (default) / **Bekräftad** + e-postfält; infotext vid Bekräftad att ingen no-show-avgift kan debiteras utan kort (§3.2)
+- [x] PENDING-semantiken utökas till "väntar på kortbekräftelse" — badge-label ändras från "Väntar" till "Preliminär"; AI-mejlflödets användning och Bekräfta-knappen behålls (§3.3)
+- [x] Utskicksmall 2 **Kortlänk**: förklarar garantin, inget dras nu, auto-avbokning utan kort; CTA "Ange kort och bekräfta" (§3.7)
+- [x] Kortsida via hanteringslänken: kortnummer (minst 12 siffror aktiverar knappen), giltighet, CVC mot PSP-stubben; spara `cardLast4`; auto-bekräfta → `CONFIRMED` + bekräftelsemejl (§2 p.2, §3.1 kortsteget)
+- [x] Gul panel i bokningsdetaljen: "Väntar på kortbekräftelse" + beräknad deadline ("avbokas automatiskt kl HH:MM — X tim före") + knappen **"Skicka kortlänken igen"** (§3.3). Deadline beräknas vid rendering, lagras aldrig (§2b p.3)
 
 **Klart när:** personal skapar preliminär → gästen får kortlänken → anger kort → bokningen auto-bekräftas, med varje steg i kommunikationsloggen.
 

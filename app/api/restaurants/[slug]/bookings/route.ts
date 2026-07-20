@@ -10,6 +10,8 @@ import {
   localToUtc,
 } from "@/lib/booking/availability";
 import { findOrCreateGuest } from "@/lib/booking/guests";
+import { logCommunication } from "@/lib/messaging/notify";
+import { sendCardLink } from "@/lib/messaging/card-link";
 
 const dropInSchema = z
   .object({
@@ -29,12 +31,24 @@ const dropInSchema = z
       .optional(),
     onSite: z.boolean().default(false), // gästen står här → SEATED direkt
     notes: z.string().max(500).optional(),
+    /**
+     * Preliminär (§3.2): gästen mejlas kortlänken och bokningen bekräftas
+     * automatiskt när kortet registrerats. Default CONFIRMED behåller
+     * bakåtkompat med walk-in-anrop.
+     */
+    status: z.enum(["PENDING", "CONFIRMED"]).default("CONFIRMED"),
   })
   .refine((d) => d.childrenCount <= d.partySize, {
     message: "Antal barn kan inte överstiga sällskapets storlek",
   })
   .refine((d) => !(d.guestId && d.guest), {
     message: "Ange antingen guestId eller guest — inte båda.",
+  })
+  .refine((d) => !(d.onSite && d.status === "PENDING"), {
+    message: "En gäst på plats kan inte vara preliminär.",
+  })
+  .refine((d) => d.status !== "PENDING" || d.guestId || d.guest?.email, {
+    message: "Ange gästens e-post — kortlänken mejlas dit.",
   });
 
 // POST /api/restaurants/{slug}/bookings — personalens drop-in/inringda
@@ -86,6 +100,12 @@ export async function POST(
     if (!guest) {
       return NextResponse.json({ error: "Okänd kund." }, { status: 404 });
     }
+    if (body.status === "PENDING" && !guest.email) {
+      return NextResponse.json(
+        { error: "Gästen saknar e-post — kortlänken kan inte mejlas." },
+        { status: 400 },
+      );
+    }
   } else if (body.guest) {
     if (body.guest.phone || body.guest.email) {
       const { guest } = await findOrCreateGuest(restaurant.id, body.guest);
@@ -104,7 +124,7 @@ export async function POST(
     guestId = placeholder.id;
   }
 
-  const status = body.onSite ? ("SEATED" as const) : ("CONFIRMED" as const);
+  const status = body.onSite ? ("SEATED" as const) : body.status;
   const seatedAt = body.onSite ? new Date() : null;
 
   // Valt bord: validera kapacitet och skriv direkt (constrainten vaktar
@@ -144,8 +164,9 @@ export async function POST(
           createdBy: "dropin",
         },
       });
+      await afterStaffCreate(booking.id, status, request.nextUrl.origin);
       return NextResponse.json(
-        { bookingId: booking.id, tableName: table.name },
+        { bookingId: booking.id, tableName: table.name, status },
         { status: 201 },
       );
     } catch (e) {
@@ -178,7 +199,8 @@ export async function POST(
     body.time,
     body.partySize,
     body.notes,
-    { status: "CONFIRMED", createdBy: "dropin" },
+    // onSite → SEATED sätts i efterpatchen nedan (createBooking tar bara PENDING/CONFIRMED)
+    { status: status === "SEATED" ? "CONFIRMED" : status, createdBy: "dropin" },
   );
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 409 });
@@ -192,8 +214,25 @@ export async function POST(
       },
     });
   }
+  await afterStaffCreate(result.bookingId, status, request.nextUrl.origin);
   return NextResponse.json(
-    { bookingId: result.bookingId, tableName: result.tableName },
+    { bookingId: result.bookingId, tableName: result.tableName, status },
     { status: 201 },
   );
+}
+
+// Kommunikationslogg + kortlänksutskick för nyskapade personalbokningar.
+// RECEIVED loggas för alla; preliminära får kortlänken mejlad (§3.2).
+async function afterStaffCreate(
+  bookingId: string,
+  status: "PENDING" | "CONFIRMED" | "SEATED",
+  origin: string,
+) {
+  await logCommunication(bookingId, "RECEIVED", null, { kalla: "personal" });
+  if (status === "PENDING") {
+    const sent = await sendCardLink(bookingId, origin);
+    if (!sent.ok) {
+      console.error(`Kortlänken gick inte att skicka: ${sent.error}`);
+    }
+  }
 }

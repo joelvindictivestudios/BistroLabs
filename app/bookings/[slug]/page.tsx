@@ -30,6 +30,11 @@ export default async function BookingsPage({
         restaurantId={restaurant.id}
         restaurantName={restaurant.name}
         openingHours={config.openingHours}
+        policy={{
+          noShowFeePerGuest: config.noShowFeePerGuest,
+          cancellationWindowHours: config.cancellationWindowHours,
+          cardGuaranteeRequired: config.cardGuaranteeRequired,
+        }}
       />
     </div>
   );

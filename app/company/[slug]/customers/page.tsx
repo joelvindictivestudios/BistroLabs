@@ -30,9 +30,11 @@ export default async function CustomersPage({
           lastVisit: true,
           visitCount: true,
           marketingConsent: true,
+          tags: true,
         },
       },
-      // Avbokningar och no-shows räknas inte som bokningar i kundlistan
+      // Avbokningar och no-shows räknas inte som bokningar i kundlistan;
+      // no-shows räknas separat (§3.12) — beräknas vid läsning
       _count: {
         select: {
           bookings: { where: { status: { notIn: ["CANCELLED", "NO_SHOW"] } } },
@@ -40,6 +42,14 @@ export default async function CustomersPage({
       },
     },
   });
+  const noShowCounts = await prisma.booking.groupBy({
+    by: ["guestId"],
+    where: { restaurantId: restaurant.id, status: "NO_SHOW" },
+    _count: { _all: true },
+  });
+  const noShowByGuest = new Map(
+    noShowCounts.map((n) => [n.guestId, n._count._all]),
+  );
 
   return (
     <CustomersClient
@@ -55,6 +65,8 @@ export default async function CustomersPage({
         marketingConsent: g.profile?.marketingConsent ?? false,
         lastVisit: g.profile?.lastVisit?.toISOString() ?? null,
         createdAt: g.createdAt.toISOString(),
+        noShowCount: noShowByGuest.get(g.id) ?? 0,
+        tags: g.profile?.tags ?? [],
       }))}
     />
   );

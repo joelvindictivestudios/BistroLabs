@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Search01Icon, UserAdd01Icon } from "@hugeicons/core-free-icons";
+import { CustomerProfile } from "./customer-profile";
 
 // Kundregistret: sök, skapa, redigera, importera (CSV) och radera kunder.
 // Regel: e-post ELLER telefon krävs, namn valfritt, plus fritext för
@@ -19,6 +20,9 @@ export type CustomerRow = {
   marketingConsent: boolean;
   lastVisit: string | null;
   createdAt: string;
+  /** Beräknas vid läsning (§3.12) — sökendpointen kan sakna fälten. */
+  noShowCount?: number;
+  tags?: string[];
 };
 
 type ImportSummary = {
@@ -36,6 +40,8 @@ export function CustomersClient({ slug, initialGuests }: Props) {
   const [searching, setSearching] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<CustomerRow | null>(null);
+  // Gästprofilen (§3.12): radklick öppnar panelen med historik + märkningar
+  const [viewing, setViewing] = useState<CustomerRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
@@ -159,6 +165,18 @@ export function CustomersClient({ slug, initialGuests }: Props) {
         </div>
       )}
 
+      {viewing && !editing && !showForm && (
+        <CustomerProfile
+          slug={slug}
+          guest={viewing}
+          onEdit={() => {
+            setEditing(viewing);
+            setViewing(null);
+          }}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
       {(showForm || editing) && (
         <CustomerForm
           slug={slug}
@@ -233,23 +251,59 @@ export function CustomersClient({ slug, initialGuests }: Props) {
               </tr>
             )}
             {guests.map((g) => (
-              <tr key={g.id} className="hover:bg-[var(--w-panel)]/60">
-                <td className="px-4 py-3">{g.name ?? "—"}</td>
+              <tr
+                key={g.id}
+                onClick={() => {
+                  setViewing(g);
+                  setEditing(null);
+                  setShowForm(false);
+                }}
+                className="cursor-pointer hover:bg-[var(--w-panel)]/60"
+              >
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span>{g.name ?? "—"}</span>
+                    {(g.tags ?? []).map((t) => (
+                      <span
+                        key={t}
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize ${
+                          t === "allergi"
+                            ? "border-status-late-border bg-status-late-bg text-status-late-fg"
+                            : t === "stamgäst"
+                              ? "border-status-booked-border bg-status-booked-bg text-status-booked-fg"
+                              : "border-status-pending-border bg-status-pending-bg text-status-pending-fg"
+                        }`}
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-xs">
                   <div>{g.email ?? ""}</div>
                   <div className="font-mono text-[var(--w-muted)]">
                     {g.phone ?? ""}
                   </div>
                 </td>
-                <td className="px-4 py-3">{g.bookingCount}</td>
+                <td className="px-4 py-3">
+                  {g.bookingCount}
+                  {(g.noShowCount ?? 0) > 0 && (
+                    <span className="ml-1.5 text-xs font-semibold text-status-late-fg">
+                      · {g.noShowCount} no-show
+                      {(g.noShowCount ?? 0) === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </td>
                 <td className="max-w-56 truncate px-4 py-3 text-xs text-[var(--w-muted)]">
                   {g.notes || "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setEditing(g);
                       setShowForm(false);
+                      setViewing(null);
                     }}
                     className="rounded-lg border border-[var(--w-line)] px-3 py-1 text-xs text-[var(--w-muted)] hover:border-[var(--w-accent)] hover:text-[var(--w-ink)] transition"
                   >

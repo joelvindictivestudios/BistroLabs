@@ -9,6 +9,8 @@ const patchGuestSchema = z.object({
   phone: z.string().min(5).max(30).nullable().optional(),
   notes: z.string().max(1000).optional(),
   marketingConsent: z.boolean().optional(),
+  /** Märkningar (§3.12): allergi / stamgäst / barnfamilj. */
+  tags: z.array(z.string().min(1).max(30)).max(10).optional(),
 });
 
 // PATCH /api/restaurants/{slug}/guests/{id} — uppdatera kunduppgifter/notes.
@@ -76,7 +78,11 @@ export async function PATCH(
     throw e;
   }
 
-  if (body.notes !== undefined || body.marketingConsent !== undefined) {
+  if (
+    body.notes !== undefined ||
+    body.marketingConsent !== undefined ||
+    body.tags !== undefined
+  ) {
     // Samtycket tidsstämplas vid opt-in (19 § MFL) och nollas vid opt-out
     const consentData =
       body.marketingConsent === undefined
@@ -86,14 +92,77 @@ export async function PATCH(
           : { marketingConsent: false, marketingConsentAt: null };
     const notesData =
       body.notes === undefined ? {} : { notes: body.notes.trim() || null };
+    const tagsData = body.tags === undefined ? {} : { tags: body.tags };
     await prisma.guestProfile.upsert({
       where: { guestId: guest.id },
-      update: { ...notesData, ...consentData },
-      create: { guestId: guest.id, ...notesData, ...consentData },
+      update: { ...notesData, ...consentData, ...tagsData },
+      create: { guestId: guest.id, ...notesData, ...consentData, ...tagsData },
     });
   }
 
   return NextResponse.json({ ok: true });
+}
+
+// GET /api/restaurants/{slug}/guests/{id} — gästprofilens händelsehistorik
+// (§3.12): besök, avbokningar (i tid/auto), no-shows med belopp, ur
+// bokningarna — beräknas vid läsning, ingen denormaliserad räknare.
+export async function GET(
+  request: NextRequest,
+  ctx: RouteContext<"/api/restaurants/[slug]/guests/[id]">,
+) {
+  const user = await getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Inte inloggad." }, { status: 401 });
+  }
+  const { slug, id } = await ctx.params;
+  const restaurant = await prisma.restaurant.findUnique({ where: { slug } });
+  if (!restaurant) {
+    return NextResponse.json({ error: "Okänd restaurang." }, { status: 404 });
+  }
+  if (restaurant.ownerId !== user.id) {
+    return NextResponse.json(
+      { error: "Du äger inte den här restaurangen." },
+      { status: 403 },
+    );
+  }
+  const guest = await prisma.guest.findFirst({
+    where: { id, restaurantId: restaurant.id },
+    include: { profile: { select: { tags: true, lastVisit: true } } },
+  });
+  if (!guest) {
+    return NextResponse.json({ error: "Okänd kund." }, { status: 404 });
+  }
+
+  const bookings = await prisma.booking.findMany({
+    where: { guestId: guest.id },
+    orderBy: { startsAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      startsAt: true,
+      partySize: true,
+      status: true,
+      charged: true,
+      cancelInfo: true,
+    },
+  });
+  const noShowCount = await prisma.booking.count({
+    where: { guestId: guest.id, status: "NO_SHOW" },
+  });
+
+  return NextResponse.json({
+    tags: guest.profile?.tags ?? [],
+    lastVisit: guest.profile?.lastVisit?.toISOString() ?? null,
+    noShowCount,
+    history: bookings.map((b) => ({
+      id: b.id,
+      at: b.startsAt.toISOString(),
+      partySize: b.partySize,
+      status: b.status,
+      charged: b.charged === null ? null : Number(b.charged),
+      cancelledBy: (b.cancelInfo as { av?: string } | null)?.av ?? null,
+    })),
+  });
 }
 
 // DELETE /api/restaurants/{slug}/guests/{id} — GDPR art 17: hård radering av

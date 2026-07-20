@@ -102,8 +102,8 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 10 — Rapporter + gästprofilen
 *Beroende: etapp 5 (behöver debiteringsdata att räkna på).*
 
-- [ ] Gästprofil: no-show-räknare, märkningar (allergi / stamgäst / barnfamilj), händelsehistorik (besök, avbokningar i tid, no-shows med belopp, ändringar) (§3.12)
-- [ ] Rapporter (§3.13): no-show-andel 30 dgr (före/efter kortgarantin), debiterade avgifter, avbokningar varav auto, snittbeläggning; grafer no-shows per vecka (markera införandet) + beläggning per veckodag
+- [x] Gästprofil: no-show-räknare, märkningar (allergi / stamgäst / barnfamilj), händelsehistorik (besök, avbokningar i tid, no-shows med belopp, ändringar) (§3.12)
+- [x] Rapporter (§3.13): no-show-andel 30 dgr (före/efter kortgarantin), debiterade avgifter, avbokningar varav auto, snittbeläggning; grafer no-shows per vecka (markera införandet) + beläggning per veckodag
 
 **Klart när:** KPI:erna räknas på riktig data och gästprofilen visar hela historiken.
 

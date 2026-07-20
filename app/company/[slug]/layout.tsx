@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { prisma } from "@/lib/db/client";
 import { getUser } from "@/lib/auth/server";
@@ -58,7 +59,13 @@ export default async function CompanyLayout({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <CompanySidebar slug={slug} initialPendingCount={pendingDrafts} />
+        <CompanySidebar
+          slug={slug}
+          initialPendingCount={pendingDrafts}
+          initialCollapsed={
+            (await cookies()).get("bl-sidebar")?.value === "1"
+          }
+        />
         <main className="min-w-0 flex-1 overflow-y-auto px-8 py-8">
           {children}
         </main>

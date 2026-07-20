@@ -154,7 +154,7 @@ export function CompanySidebar({
 
   return (
     <aside
-      className={`flex shrink-0 flex-col overflow-hidden border-r border-line px-3 py-6 transition-[width] motion-safe:duration-300 motion-safe:ease-[cubic-bezier(0.32,0.72,0,1)] ${
+      className={`flex shrink-0 flex-col overflow-x-hidden overflow-y-auto border-r border-line px-3 py-6 transition-[width] motion-safe:duration-300 motion-safe:ease-[cubic-bezier(0.32,0.72,0,1)] ${
         collapsed ? "w-[70px]" : "w-56"
       }`}
     >

@@ -44,11 +44,11 @@ export async function AdminShell({
     },
   });
 
+  // h-dvh (inte min-h): skalet låses till viewporten så att main scrollar
+  // internt — annars växer hela sidan och sidomenyns bottenknappar
+  // (Förhandsgranska/Minimera) trycks ner under skärmkanten på långa sidor
   return (
-    <div
-      data-theme={dataTheme}
-      className="flex min-h-dvh flex-col bg-app text-ink"
-    >
+    <div data-theme={dataTheme} className="flex h-dvh flex-col bg-app text-ink">
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-[var(--w-line)] px-6">
         <Link href={`/company/${slug}`} aria-label="Till översikten">
           <BrandLogo />

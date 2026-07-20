@@ -60,7 +60,7 @@ export function CustomerProfile({
   const [noShowCount, setNoShowCount] = useState(guest.noShowCount ?? 0);
   const [lastVisit, setLastVisit] = useState(guest.lastVisit);
   const [history, setHistory] = useState<HistoryRow[] | null>(null);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -92,7 +92,7 @@ export function CustomerProfile({
       ? tags.filter((t) => t !== key)
       : [...tags, key];
     setTags(next);
-    setSavedAt(null);
+    setSaved(false);
     setError(null);
     try {
       const res = await fetch(`/api/restaurants/${slug}/guests/${guest.id}`, {
@@ -105,7 +105,7 @@ export function CustomerProfile({
         setError(data.error ?? "Kunde inte spara märkningen.");
         return;
       }
-      setSavedAt(Date.now());
+      setSaved(true);
     } catch {
       setError("Kunde inte spara märkningen.");
     }
@@ -129,7 +129,7 @@ export function CustomerProfile({
           </h2>
         </div>
         <div className="flex items-center gap-2">
-          {savedAt && !error && (
+          {saved && !error && (
             <span className="text-xs text-emerald-400">Sparat ✓</span>
           )}
           <button

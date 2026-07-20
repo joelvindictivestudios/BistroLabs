@@ -31,6 +31,8 @@ export function CancelDialog({
   onClose: () => void;
 }) {
   const [match, setMatch] = useState<WaitlistEntry | null>(null);
+  // Frusen vid öppning — policyraden ska inte flippa mitt i dialogen
+  const [openedAt] = useState(() => Date.now());
 
   // Väntelistematchen hämtas när dialogen öppnas (§3.8) — endpointen kommer
   // med väntelistan (etapp 8); 404 innan dess är ofarligt.
@@ -54,7 +56,8 @@ export function CancelDialog({
   }, [slug, booking.id]);
 
   const beforeDeadline =
-    Date.now() < cardDeadline(booking.startsAt, policy.cancellationWindowHours).getTime();
+    openedAt <
+    cardDeadline(booking.startsAt, policy.cancellationWindowHours).getTime();
   const startClock = clockTime(new Date(booking.startsAt));
 
   return (

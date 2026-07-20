@@ -190,7 +190,8 @@ export function BookingsClient({
     [slug],
   );
   useEffect(() => {
-    void fetchWaitlist(date);
+    const id = setTimeout(() => void fetchWaitlist(date), 0);
+    return () => clearTimeout(id);
   }, [date, fetchWaitlist]);
 
   // --- Supabase Realtime: bookings-ändringar för denna restaurang ---

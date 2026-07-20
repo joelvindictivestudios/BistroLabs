@@ -92,9 +92,9 @@ export function HanteraClient(props: Props) {
   );
 
   useEffect(() => {
-    if (status === "PENDING" || status === "CONFIRMED") {
-      void loadSlots(date, party);
-    }
+    if (status !== "PENDING" && status !== "CONFIRMED") return;
+    const id = setTimeout(() => void loadSlots(date, party), 0);
+    return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, party, status]);
 

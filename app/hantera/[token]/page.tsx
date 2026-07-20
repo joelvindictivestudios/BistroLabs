@@ -16,6 +16,35 @@ export const metadata = { title: "Hantera bokning" };
 
 const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
+/** Bokningens egen dag + de kommande ~14 öppna dagarna — för datumvalet. */
+function buildOpenDays(
+  bookingStartsAt: Date,
+  config: {
+    timezone: string;
+    closedDates: string[];
+    openingHours: Record<string, unknown[]>;
+  },
+  fmtDate: Intl.DateTimeFormat,
+  fmtLabel: Intl.DateTimeFormat,
+): { value: string; label: string }[] {
+  const openDays: { value: string; label: string }[] = [];
+  const seen = new Set<string>();
+  const pushDay = (d: Date) => {
+    const value = fmtDate.format(d);
+    if (seen.has(value) || config.closedDates.includes(value)) return;
+    const weekday = WEEKDAY_KEYS[new Date(`${value}T12:00:00Z`).getUTCDay()];
+    if ((config.openingHours[weekday] ?? []).length === 0) return;
+    seen.add(value);
+    openDays.push({ value, label: fmtLabel.format(d) });
+  };
+  pushDay(bookingStartsAt);
+  const now = Date.now();
+  for (let offset = 0; offset < 21 && openDays.length < 15; offset++) {
+    pushDay(new Date(now + offset * 864e5));
+  }
+  return openDays;
+}
+
 function Shell({
   theme,
   children,
@@ -102,22 +131,8 @@ export default async function HanteraPage({
     month: "short",
   });
 
-  // Datumvalet: bokningens egen dag + de kommande ~14 öppna dagarna
-  const openDays: { value: string; label: string }[] = [];
-  const seen = new Set<string>();
   const bookingDate = fmtDate.format(booking.startsAt);
-  const pushDay = (d: Date) => {
-    const value = fmtDate.format(d);
-    if (seen.has(value) || config.closedDates.includes(value)) return;
-    const weekday = WEEKDAY_KEYS[new Date(`${value}T12:00:00Z`).getUTCDay()];
-    if ((config.openingHours[weekday] ?? []).length === 0) return;
-    seen.add(value);
-    openDays.push({ value, label: fmtLabel.format(d) });
-  };
-  pushDay(booking.startsAt);
-  for (let offset = 0; offset < 21 && openDays.length < 15; offset++) {
-    pushDay(new Date(Date.now() + offset * 864e5));
-  }
+  const openDays = buildOpenDays(booking.startsAt, config, fmtDate, fmtLabel);
 
   const status =
     booking.status === "PENDING" || booking.status === "CONFIRMED"

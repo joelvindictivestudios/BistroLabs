@@ -10,6 +10,8 @@ import { parseRestaurantConfig } from "@/lib/email-concierge/types";
 import { sendEmail } from "@/lib/messaging/send";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { sendCardLink } from "@/lib/messaging/card-link";
+import { chargeNoShowFee, releaseCard } from "@/lib/payments/psp";
+import { logCommunication } from "@/lib/messaging/notify";
 
 const patchSchema = z
   .object({
@@ -24,6 +26,8 @@ const patchSchema = z
     cancelReason: z.string().max(200).optional(),
     /** Återaktivera avbokad bokning (§3.5): → CONFIRMED om kort finns, annars PENDING. */
     reactivate: z.boolean().optional(),
+    /** No-show med debitering (§3.4): beloppet beräknas ALLTID server-side. */
+    chargeNoShowFee: z.boolean().optional(),
     // Tidsändring: date+time (lokal restaurangtid); endTime valfri —
     // annars start + bookingDurationMinutes
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -44,6 +48,9 @@ const patchSchema = z
   })
   .refine((d) => !d.reactivate || d.status === undefined, {
     message: "reactivate kombineras inte med status — målstatus avgörs av kortet.",
+  })
+  .refine((d) => !d.chargeNoShowFee || d.status === "NO_SHOW", {
+    message: "chargeNoShowFee kräver status NO_SHOW.",
   });
 
 // PATCH /api/restaurants/{slug}/bookings/{id} — personalens verktyg i dagvyn:
@@ -92,6 +99,7 @@ export async function PATCH(
     staffNote,
     cancelReason,
     reactivate,
+    chargeNoShowFee: chargeFee,
     date,
     time,
     endTime,
@@ -154,6 +162,36 @@ export async function PATCH(
 
   const completing = status === "COMPLETED" && booking.status !== "COMPLETED";
 
+  // No-show med debitering (§3.4): beloppet = noShowFeePerGuest × partySize,
+  // beräknat här — aldrig från klienten. Misslyckad debitering lämnar
+  // statusen orörd (502) så personalen kan försöka igen eller markera utan
+  // avgift.
+  let chargedAmount: number | null = null;
+  let chargeRef: string | null = null;
+  if (status === "NO_SHOW" && chargeFee) {
+    if (!booking.cardPspToken) {
+      return NextResponse.json(
+        { error: "Inget kort är registrerat på bokningen — avgiften kan inte debiteras." },
+        { status: 400 },
+      );
+    }
+    const config = parseRestaurantConfig(restaurant.config);
+    const amount = config.noShowFeePerGuest * booking.partySize;
+    const charge = await chargeNoShowFee(
+      booking.cardPspToken,
+      amount,
+      booking.id,
+    );
+    if (!charge.ok) {
+      return NextResponse.json(
+        { error: `Debiteringen misslyckades: ${charge.error}` },
+        { status: 502 },
+      );
+    }
+    chargedAmount = amount;
+    chargeRef = charge.chargeId;
+  }
+
   try {
     const data = {
       ...(tableId !== undefined ? { tableId } : {}),
@@ -170,9 +208,12 @@ export async function PATCH(
         : arrivedCount !== undefined
           ? { arrivedCount }
           : {}),
-      // GDPR-gallring: allergiuppgiften raderas när besöket är genomfört
-      // (samtyckesloggen behålls som bevis)
-      ...(completing ? { allergyNote: null } : {}),
+      // GDPR-gallring: allergiuppgift + kortreferens raderas när besöket är
+      // genomfört (samtyckesloggen behålls som bevis; kortet släpps nedan)
+      ...(completing
+        ? { allergyNote: null, cardPspToken: null, cardLast4: null }
+        : {}),
+      ...(chargedAmount !== null ? { charged: chargedAmount } : {}),
       // Avbokning: vem/varför/när (§1). Kortet behålls i 7 dagar för
       // återaktivering (§3.5) — gallringscronen städar.
       ...(status === "CANCELLED" && booking.status !== "CANCELLED"
@@ -211,6 +252,16 @@ export async function PATCH(
           data,
           include: { table: { select: { name: true } } },
         });
+
+    if (completing && booking.cardPspToken) {
+      await releaseCard(booking.cardPspToken); // best-effort, kastar aldrig
+    }
+    if (chargedAmount !== null) {
+      await logCommunication(booking.id, "FEE_CHARGED", null, {
+        belopp: chargedAmount,
+        chargeId: chargeRef,
+      });
+    }
 
     // Återaktivering till PENDING: gästen behöver kortlänken på nytt
     if (reactivate && status === "PENDING") {

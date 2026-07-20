@@ -52,10 +52,10 @@ Referenser i parentes pekar på avsnitt i `OVERLAMNING-GPG.md`. Det som redan fi
 ## Etapp 5 — No-show med debitering
 *Beroende: etapp 1 (kortdata från etapp 3 för skarpa fall).*
 
-- [ ] Dialog **med kort** (§3.4): specifikation (last4, `noShowFeePerGuest` × antal, totalbelopp), primärknapp "Debitera X kr och markera", sekundär "Markera no-show utan avgift"
-- [ ] Dialog **utan kort**: förklarande text, enda åtgärd är markera utan avgift — gäller även restauranger med `cardGuaranteeRequired: false` (§2b p.4)
-- [ ] Debitering mot PSP-stubben → skriv `charged`, röd panel "No-show-avgift debiterad" på bokningen
-- [ ] Beloppet in i gästens händelsehistorik och i `CommunicationLog` (underlag för rapporterna i etapp 10)
+- [x] Dialog **med kort** (§3.4): specifikation (last4, `noShowFeePerGuest` × antal, totalbelopp), primärknapp "Debitera X kr och markera", sekundär "Markera no-show utan avgift"
+- [x] Dialog **utan kort**: förklarande text, enda åtgärd är markera utan avgift — gäller även restauranger med `cardGuaranteeRequired: false` (§2b p.4)
+- [x] Debitering mot PSP-stubben → skriv `charged`, röd panel "No-show-avgift debiterad" på bokningen
+- [x] Beloppet in i gästens händelsehistorik och i `CommunicationLog` (underlag för rapporterna i etapp 10)
 
 **Klart när:** no-show på en bokning med kort debiterar (stub) och loggar beloppet, utan kort går bara utan avgift.
 

@@ -20,6 +20,8 @@ import {
   ChargedPanel,
   CancelledPanel,
 } from "./booking-panels";
+import { NoShowModal } from "./noshow-modal";
+import { CancelDialog } from "./cancel-dialog";
 
 // BLA-31: den operativa dagvyn. Bordskartan (read-only-layout) visar dagens
 // bokningar vid vald tidpunkt, uppdateras i realtid via Supabase postgres_changes,
@@ -272,6 +274,7 @@ export function BookingsClient({
         time?: string;
         endTime?: string;
         reactivate?: boolean;
+        chargeNoShowFee?: boolean;
       },
     ) => {
       setError(null);
@@ -307,8 +310,11 @@ export function BookingsClient({
     data?.bookings.find((b) => b.id === modalBookingId) ?? null;
   const [dropInOpen, setDropInOpen] = useState(false);
   const [newBookingOpen, setNewBookingOpen] = useState(false);
-  // Tvåstegs-avboka: kortet vars avbokning väntar på "Ja, avboka"/"Ångra"
-  const [cancelArmedId, setCancelArmedId] = useState<string | null>(null);
+  // No-show- och avbokningsdialogerna (§3.4, §3.5) — id-baserade så en
+  // realtime-refetch aldrig klipper pågående dialog
+  const [noShowForId, setNoShowForId] = useState<string | null>(null);
+  const [cancelForId, setCancelForId] = useState<string | null>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
   const [attachBookingId, setAttachBookingId] = useState<string | null>(null);
   const [listDrag, setListDrag] = useState<{
     bookingId: string;
@@ -737,7 +743,6 @@ export function BookingsClient({
                   minutesSinceStart(b, now) > 0;
                 const sinceStart = minutesSinceStart(b, now);
                 const draggable = OCCUPYING.has(b.status) && b.tableId;
-                const cancelArmed = cancelArmedId === b.id;
                 return (
                   <div
                     key={b.id}
@@ -749,7 +754,7 @@ export function BookingsClient({
                       selectedBookingId === b.id
                         ? "border-[var(--w-accent)] bg-[var(--w-accent)]/5"
                         : "border-[var(--w-line)] bg-[var(--w-panel)] hover:border-[var(--w-muted)]"
-                    }`}
+                    } ${b.status === "CANCELLED" ? "opacity-60" : ""}`}
                   >
                     <div className="flex items-start gap-3">
                       <div className="flex shrink-0 flex-col items-center gap-1">
@@ -824,98 +829,68 @@ export function BookingsClient({
                             </span>
                           )}
                         </div>
-                        {/* Åtgärdsrad — 44 pt träffytor (iPad under service) */}
-                        {cancelArmed ? (
-                          <div
-                            className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-status-late-border bg-status-late-bg px-3 py-2"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <span className="text-xs font-medium text-status-late-fg">
-                              Avboka bokningen?
-                            </span>
-                            <span className="ml-auto flex gap-2">
-                              <button
-                                onClick={() => {
-                                  setCancelArmedId(null);
-                                  void patchBooking(b.id, {
-                                    status: "CANCELLED",
-                                  });
-                                }}
-                                className="min-h-11 rounded-lg bg-[#b5503f] px-3 text-xs font-semibold text-white hover:brightness-110 transition"
-                              >
-                                Ja, avboka
-                              </button>
-                              <button
-                                onClick={() => setCancelArmedId(null)}
-                                className="min-h-11 rounded-lg border border-[var(--w-line)] px-3 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
-                              >
-                                Ångra
-                              </button>
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="mt-1.5 flex flex-wrap justify-end gap-1.5">
-                            {b.status === "PENDING" && (
+                        {/* Åtgärdsrad — 44 pt träffytor (iPad under service).
+                            No-show och Avboka går ALLTID via dialogerna
+                            (§3.4/§3.5) — debitering resp. väntelistematch. */}
+                        <div className="mt-1.5 flex flex-wrap justify-end gap-1.5">
+                          {b.status === "PENDING" && (
+                            <ActionButton
+                              label="Bekräfta"
+                              tone="green"
+                              onClick={() => {
+                                focusBooking(b);
+                                void patchBooking(b.id, {
+                                  status: "CONFIRMED",
+                                });
+                              }}
+                            />
+                          )}
+                          {(b.status === "PENDING" ||
+                            b.status === "CONFIRMED") && (
+                            <>
                               <ActionButton
-                                label="Bekräfta"
+                                label="Anlänt"
                                 tone="green"
                                 onClick={() => {
                                   focusBooking(b);
                                   void patchBooking(b.id, {
-                                    status: "CONFIRMED",
+                                    status: "SEATED",
                                   });
                                 }}
                               />
-                            )}
-                            {(b.status === "PENDING" ||
-                              b.status === "CONFIRMED") && (
-                              <>
+                              {late && (
                                 <ActionButton
-                                  label="Anlänt"
-                                  tone="green"
+                                  label="No-show…"
+                                  tone="red"
                                   onClick={() => {
                                     focusBooking(b);
-                                    void patchBooking(b.id, {
-                                      status: "SEATED",
-                                    });
+                                    setNoShowForId(b.id);
                                   }}
                                 />
-                                {late && (
-                                  <ActionButton
-                                    label="Släpp bordet"
-                                    tone="red"
-                                    onClick={() => {
-                                      focusBooking(b);
-                                      void patchBooking(b.id, {
-                                        status: "NO_SHOW",
-                                      });
-                                    }}
-                                  />
-                                )}
-                                <ActionButton
-                                  label="Avboka…"
-                                  tone="neutral"
-                                  onClick={() => {
-                                    focusBooking(b);
-                                    setCancelArmedId(b.id);
-                                  }}
-                                />
-                              </>
-                            )}
-                            {b.status === "SEATED" && (
+                              )}
                               <ActionButton
-                                label="Avsluta"
+                                label="Avboka…"
                                 tone="neutral"
                                 onClick={() => {
                                   focusBooking(b);
-                                  void patchBooking(b.id, {
-                                    status: "COMPLETED",
-                                  });
+                                  setCancelForId(b.id);
                                 }}
                               />
-                            )}
-                          </div>
-                        )}
+                            </>
+                          )}
+                          {b.status === "SEATED" && (
+                            <ActionButton
+                              label="Avsluta"
+                              tone="neutral"
+                              onClick={() => {
+                                focusBooking(b);
+                                void patchBooking(b.id, {
+                                  status: "COMPLETED",
+                                });
+                              }}
+                            />
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -939,9 +914,90 @@ export function BookingsClient({
           slug={slug}
           policy={policy}
           patchBooking={patchBooking}
+          onNoShow={() => setNoShowForId(modalBooking.id)}
+          onCancel={() => setCancelForId(modalBooking.id)}
           onClose={() => setModalBookingId(null)}
         />
       )}
+
+      {/* No-show-dialogen (§3.4): med/utan kort, debitering via PSP-stubben */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === noShowForId);
+        if (!b) return null;
+        return (
+          <NoShowModal
+            booking={b}
+            policy={policy}
+            busy={dialogBusy}
+            onCharge={() => {
+              setDialogBusy(true);
+              void patchBooking(b.id, {
+                status: "NO_SHOW",
+                chargeNoShowFee: true,
+              }).finally(() => {
+                setDialogBusy(false);
+                setNoShowForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onNoCharge={() => {
+              setDialogBusy(true);
+              void patchBooking(b.id, { status: "NO_SHOW" }).finally(() => {
+                setDialogBusy(false);
+                setNoShowForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onClose={() => setNoShowForId(null)}
+          />
+        );
+      })()}
+
+      {/* Avbokningsdialogen (§3.5): policyrad + väntelistematch */}
+      {(() => {
+        const b = data?.bookings.find((x) => x.id === cancelForId);
+        if (!b) return null;
+        return (
+          <CancelDialog
+            slug={slug}
+            booking={b}
+            policy={policy}
+            busy={dialogBusy}
+            onCancel={() => {
+              setDialogBusy(true);
+              void patchBooking(b.id, { status: "CANCELLED" }).finally(() => {
+                setDialogBusy(false);
+                setCancelForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onCancelAndOffer={(entryId, offeredTime) => {
+              setDialogBusy(true);
+              void (async () => {
+                const ok = await patchBooking(b.id, { status: "CANCELLED" });
+                if (ok) {
+                  // Erbjudandet är en separat personalhandling — faller det
+                  // ligger posten kvar som Väntar (ofarligt)
+                  await fetch(
+                    `/api/restaurants/${slug}/waitlist/${entryId}/offer`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ time: offeredTime }),
+                    },
+                  ).catch(() => {});
+                  await fetchDay(dateRef.current);
+                }
+              })().finally(() => {
+                setDialogBusy(false);
+                setCancelForId(null);
+                setModalBookingId(null);
+              });
+            }}
+            onClose={() => setCancelForId(null)}
+          />
+        );
+      })()}
 
       {/* Ny bokning: namn + telefon för ny gäst inline */}
       {newBookingOpen && data && (
@@ -1015,6 +1071,8 @@ function BookingModal({
   slug,
   policy,
   patchBooking,
+  onNoShow,
+  onCancel,
   onClose,
 }: {
   booking: Booking;
@@ -1035,6 +1093,8 @@ function BookingModal({
       reactivate?: boolean;
     },
   ) => Promise<boolean>;
+  onNoShow: () => void;
+  onCancel: () => void;
   onClose: () => void;
 }) {
   const clock = (iso: string) =>
@@ -1055,7 +1115,6 @@ function BookingModal({
   const [arrived, setArrived] = useState(
     booking.arrivedCount ?? booking.partySize,
   );
-  const [cancelArmed, setCancelArmed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const seatedMinutes = booking.seatedAt
@@ -1304,36 +1363,22 @@ function BookingModal({
               Avsluta besöket
             </button>
           )}
-          {active &&
-            (cancelArmed ? (
-              <div className="flex items-center gap-2 rounded-xl border border-status-late-border bg-status-late-bg px-3 py-2">
-                <span className="text-xs font-medium text-status-late-fg">
-                  Avboka bokningen?
-                </span>
-                <span className="ml-auto flex gap-2">
-                  <button
-                    onClick={() => void setStatus("CANCELLED")}
-                    disabled={busy}
-                    className="min-h-11 rounded-lg bg-[#b5503f] px-3 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-60 transition"
-                  >
-                    Ja, avboka
-                  </button>
-                  <button
-                    onClick={() => setCancelArmed(false)}
-                    className="min-h-11 rounded-lg border border-[var(--w-line)] px-3 text-xs text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
-                  >
-                    Ångra
-                  </button>
-                </span>
-              </div>
-            ) : (
+          {(booking.status === "PENDING" || booking.status === "CONFIRMED") && (
+            <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => setCancelArmed(true)}
-                className="min-h-11 w-full rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
+                onClick={onNoShow}
+                className="min-h-11 rounded-xl border border-status-late-border text-sm font-medium text-status-late-fg hover:bg-status-late-bg transition"
+              >
+                No-show…
+              </button>
+              <button
+                onClick={onCancel}
+                className="min-h-11 rounded-xl border border-[#5c3a30] text-sm font-medium text-[#d1786a] hover:bg-status-late-bg transition"
               >
                 Avboka…
               </button>
-            ))}
+            </div>
+          )}
           <button
             onClick={onClose}
             className="min-h-11 w-full rounded-xl border border-[var(--w-line)] text-sm text-[var(--w-muted)] hover:text-[var(--w-ink)] transition"
